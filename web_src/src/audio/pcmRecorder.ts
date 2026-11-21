@@ -27,6 +27,8 @@ export interface RecordingResult {
 
 export interface ActiveRecording {
   stop(): Promise<RecordingResult>
+  /** Current audio as a WAV, without interrupting the recording (turn-taking probe). */
+  snapshot(): Blob
   cancel(): void
   markStart(): void
   isActive(): boolean
@@ -207,6 +209,11 @@ export async function startRecording(options: RecorderOptions = {}): Promise<Act
         durationSec: merged.length / captureRate,
         sampleRate: TARGET_RATE,
       }
+    },
+    snapshot(): Blob {
+      if (!active) return new Blob([], { type: 'audio/wav' })
+      const merged = mergeChunks(chunks)
+      return encodeWav(resample(merged, captureRate, TARGET_RATE), TARGET_RATE)
     },
     cancel() { void cleanup() },
     markStart() {

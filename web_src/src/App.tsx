@@ -85,6 +85,14 @@ export default function App() {
   const [mode, setMode] = useState<MicMode>('auto')
   // V1.1: the learner ends the answer. Silence still triggers the stuck hint, but
   // never cuts the recording unless this is switched on.
+  const [smartTurn, setSmartTurn] = useState(() => {
+    try {
+      return window.localStorage.getItem('ielts-smart-turn') !== '0'
+    } catch {
+      return true
+    }
+  })
+  const [liveHintWords, setLiveHintWords] = useState<string[]>([])
   const [cutOnSilence, setCutOnSilence] = useState(() => {
     try {
       return window.localStorage.getItem('ielts-cut-on-silence') === '1'
@@ -119,9 +127,13 @@ export default function App() {
   const phaseRef = useRef<Phase>(previewMode ? 'idle' : 'gate')
   const modeRef = useRef<MicMode>('auto')
   const cutOnSilenceRef = useRef(cutOnSilence)
+  const smartTurnRef = useRef(smartTurn)
   useEffect(() => {
     cutOnSilenceRef.current = cutOnSilence
   }, [cutOnSilence])
+  useEffect(() => {
+    smartTurnRef.current = smartTurn
+  }, [smartTurn])
   const mutedRef = useRef(false)
   const part2Ref = useRef<Part2State>(part2)
   const currentPartRef = useRef('part1')
@@ -301,11 +313,22 @@ export default function App() {
     setAppError(null)
     setNotice(null)
     setLiveStuck(false)
+    setLiveHintWords([])
     setElapsed(0)
     listeningStartedAtRef.current = Date.now()
     let recordingFailed = false
     const utterance = new LiveUtterance(id, {
       autoStop: cutOnSilenceRef.current && !continuous,
+      smartTurn: smartTurnRef.current && !continuous,
+      onProbe: (result) => {
+        if (sessionIdRef.current !== id) return
+        if (result.stuck) {
+          setLiveStuck(true)
+          setLiveHintWords((result.hint_words || []).slice(0, 3))
+        } else if (result.complete) {
+          setLiveStuck(false)
+        }
+      },
       onLevel: setLevel,
       onVad: (event) => {
         if (sessionIdRef.current !== id) return
@@ -618,6 +641,18 @@ export default function App() {
     })
   }, [cancelActive, startListening])
 
+  const toggleSmartTurn = useCallback(() => {
+    setSmartTurn((value) => {
+      const next = !value
+      try {
+        window.localStorage.setItem('ielts-smart-turn', next ? '1' : '0')
+      } catch {
+        /* private mode */
+      }
+      return next
+    })
+  }, [])
+
   const toggleCutOnSilence = useCallback(() => {
     setCutOnSilence((value) => {
       const next = !value
@@ -742,7 +777,7 @@ export default function App() {
     const tags = plan?.topic.tags ?? []
     const questionWords = activeExaminer.text.match(/[A-Za-z][A-Za-z'-]+/g) ?? []
     const output: string[] = []
-    for (const candidate of [...saved, ...tags, ...questionWords.reverse()]) {
+    for (const candidate of [...liveHintWords, ...saved, ...tags, ...questionWords.reverse()]) {
       const word = candidate.trim().replace(/^[-.!?]+|[-.!?]+$/g, '')
       if (!/^[A-Za-z][A-Za-z'-]{2,}$/.test(word)) continue
       if (STOP_WORDS.has(word.toLowerCase())) continue
@@ -750,7 +785,7 @@ export default function App() {
       if (output.length === 3) break
     }
     return output
-  }, [turns, activeExaminer, plan])
+  }, [turns, activeExaminer, plan, liveHintWords])
 
   const startPart2Speaking = useCallback(() => {
     utteranceRef.current?.markStart()
@@ -949,6 +984,8 @@ export default function App() {
             onToggleMode={changeMode}
         cutOnSilence={cutOnSilence}
         onToggleCut={toggleCutOnSilence}
+        smartTurn={smartTurn}
+        onToggleSmart={toggleSmartTurn}
             onToggleMute={toggleMute}
             onReplay={replayLast}
             onEndLesson={() => void endLesson()}

@@ -11,6 +11,10 @@ const TARGET_RATE = 16000
 const FRAME_SAMPLES = 512
 const FALLBACK_SILENCE_MS = 2600
 const FALLBACK_STUCK_MS = 2000
+//: Ask the daemon whether the sentence is finished after this much silence, and
+//: re-ask every PROBE_STEP_SEC while the learner keeps pausing.
+const PROBE_AFTER_SEC = 0.9
+const PROBE_STEP_SEC = 0.6
 const FALLBACK_RMS = 0.011
 const MAX_UTTERANCE_MS = 200_000
 
@@ -29,6 +33,18 @@ export interface LiveCallbacks {
   onFallback?: () => void
   /** Part 2 keeps recording across normal pauses until its timer/manual stop. */
   autoStop?: boolean
+  /** Decide "finished" from sentence completeness instead of silence length. */
+  smartTurn?: boolean
+  onProbe?: (result: ProbeResult) => void
+}
+
+export interface ProbeResult {
+  transcript?: string
+  complete?: boolean
+  reason?: string
+  detail?: string
+  stuck?: boolean
+  hint_words?: string[]
 }
 
 function encodeFrame(samples: Float32Array): ArrayBuffer {
@@ -61,6 +77,8 @@ export class LiveUtterance {
   private stopReason = 'manual'
   private resolver: ((result: UtteranceResult | null) => void) | null = null
   private guard: number | undefined
+  private probing = false
+  private lastProbeSilence = 0
 
   constructor(sessionId: number, callbacks: LiveCallbacks = {}) {
     this.sessionId = sessionId
@@ -128,9 +146,46 @@ export class LiveUtterance {
   private handleVad(event: VadEvent) {
     this.callbacks.onVad?.(event)
     if (event.speech_sec !== undefined) this.speechSec = event.speech_sec
+    if (event.trailing_silence !== undefined) this.maybeProbe(event.trailing_silence)
     if (event.should_stop && this.callbacks.autoStop !== false && !this.finished) {
       this.stopReason = event.stop_reason || 'silence'
       void this.finish(false)
+    }
+  }
+
+  /** Silence is only a cue to *ask*; the daemon decides if the sentence is done. */
+  private maybeProbe(silenceSec: number) {
+    if (!this.callbacks.smartTurn || this.finished || this.probing) return
+    if (!this.speechSeen) return
+    if (silenceSec < PROBE_AFTER_SEC) return
+    if (silenceSec - this.lastProbeSilence < PROBE_STEP_SEC) return
+    this.lastProbeSilence = silenceSec
+    void this.runProbe(silenceSec)
+  }
+
+  private async runProbe(silenceSec: number): Promise<void> {
+    const recorder = this.recorder
+    if (!recorder) return
+    this.probing = true
+    try {
+      const blob = recorder.snapshot()
+      if (!blob || blob.size < 2000) return
+      const form = new FormData()
+      form.append('file', blob, 'probe.wav')
+      const url = '/api/sessions/' + this.sessionId + '/probe?pause_sec=' + silenceSec.toFixed(2)
+      const response = await fetch(url, { method: 'POST', body: form })
+      if (!response.ok) return
+      const result = (await response.json()) as ProbeResult
+      if (this.finished) return
+      this.callbacks.onProbe?.(result)
+      if (result.complete) {
+        this.stopReason = 'complete'
+        void this.finish(false)
+      }
+    } catch {
+      /* the probe is advisory: a failed request must not disturb the recording */
+    } finally {
+      this.probing = false
     }
   }
 
@@ -149,6 +204,7 @@ export class LiveUtterance {
       }
     } else if (this.speechSeen) {
       const silence = now - this.lastVoiceAt
+      this.maybeProbe(silence / 1000)
       if (silence >= FALLBACK_STUCK_MS && !this.localStuck) {
         this.localStuck = true
         this.callbacks.onVad?.({ type: 'vad', speech: false, trailing_silence: silence / 1000, stuck: true })

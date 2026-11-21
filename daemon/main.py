@@ -33,6 +33,7 @@ from .audio.asr import ASRService
 from .audio.pronunciation import build_service as build_pronunciation
 from .audio.tts import TTSService
 from .audio.vad import FRAME_SAMPLES, StreamingVAD, VADService, pcm16_to_float
+from .completeness import analyze as analyze_completeness
 from .db import Database
 from .hints import HintBook, analyze_stuck, used_words
 from .planner import LessonPlanner, QuestionBank
@@ -740,6 +741,57 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         )
         ctx.registry.deliver_reply(session_id, payload)
         return {"status": "processed", **payload}
+
+    # ------------------------------------------------------------------ #
+    # Turn-taking probe: "is this sentence finished, or is the learner stuck?"
+    # ------------------------------------------------------------------ #
+    @app.post("/api/sessions/{session_id}/probe")
+    async def probe_turn(
+        session_id: int,
+        request: Request,
+        file: UploadFile | None = File(default=None),
+        pause_sec: float = 0.0,
+    ) -> dict[str, Any]:
+        """Transcribe the audio so far and judge sentence completeness.
+
+        Called on short pauses while the learner is still recording. It never
+        creates or updates a turn: the answer is only "keep listening" or "this
+        sentence can stand alone, submit it".
+        """
+        session = ctx.db.get_session(session_id)
+        if not session:
+            raise HTTPException(404, f"session {session_id} 不存在")
+        data = await (file.read() if file is not None else request.body())
+        if not data:
+            raise HTTPException(400, "没有收到音频数据")
+
+        loop = asyncio.get_running_loop()
+
+        def _work() -> dict[str, Any]:
+            info, _samples = processor.process_upload(
+                data, ctx.settings.paths.user_audio_dir / f"probe-{session_id}.wav"
+            )
+            asr_result = ctx.asr.transcribe(info.path)
+            transcript = (asr_result.get("text") or "").strip()
+            verdict = analyze_completeness(transcript, pause_sec=pause_sec)
+            hints: list[str] = []
+            if verdict["stuck"]:
+                try:
+                    plan = ctx.db.get_lesson_plan(session_id) or {}
+                    tags = (plan.get("topic") or {}).get("tags") or []
+                    rows = ctx.db.list_turns(session_id)
+                    used = used_words([row.get("learner_transcript") or "" for row in rows])
+                    hints = ctx.hints.words_for(tags, exclude=used, limit=3)
+                except Exception:  # noqa: BLE001
+                    hints = []
+            return {
+                "transcript": transcript,
+                "word_count": len(transcript.split()),
+                **verdict,
+                "hint_words": hints,
+            }
+
+        return await loop.run_in_executor(None, _work)
 
     # ------------------------------------------------------------------ #
     # Feedback / end / report

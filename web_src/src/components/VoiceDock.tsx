@@ -13,6 +13,8 @@ interface VoiceDockProps {
   onToggleMode: (mode: MicMode) => void
   cutOnSilence: boolean
   onToggleCut: () => void
+  smartTurn: boolean
+  onToggleSmart: () => void
   onToggleMute: () => void
   onReplay: () => void
   onEndLesson: () => void
@@ -28,7 +30,7 @@ const STATUS: Record<Phase, { title: string; subtitle: string }> = {
   gate: { title: '等待开课', subtitle: '先完成一次语音授权' },
   idle: { title: '轮到你了', subtitle: '准备好了就开口，也可按空格' },
   examiner_speaking: { title: '考官正在说', subtitle: '听完会自动轮到你' },
-  listening: { title: '正在听你说', subtitle: '说完点「我说完了」，卡住会给你提示' },
+  listening: { title: '正在听你说', subtitle: '说完会自己接（判断句子是否完整），卡住会给你提示' },
   submitting: { title: '语音已收到', subtitle: '正在识别，马上就好' },
   thinking: { title: '老师正在批改', subtitle: '纠错卡会出现在回答下方' },
   ended: { title: '本课已结束', subtitle: '报告与下一课入口已就绪' },
@@ -45,6 +47,8 @@ export function VoiceDock({
   onToggleMode,
   cutOnSilence,
   onToggleCut,
+  smartTurn,
+  onToggleSmart,
   onToggleMute,
   onReplay,
   onEndLesson,
@@ -123,6 +127,9 @@ export function VoiceDock({
                 <>
                   <button onClick={() => onToggleMode(mode === 'auto' ? 'manual' : 'auto')}>
                     <span>自动接话</span><strong>{mode === 'auto' ? '已开启' : '已关闭'}</strong>
+                  </button>
+                  <button onClick={onToggleSmart}>
+                    <span>智能断句</span><strong>{smartTurn ? '已开启' : '已关闭'}</strong>
                   </button>
                   <button onClick={onToggleCut}>
                     <span>停顿自动提交</span><strong>{cutOnSilence ? '已开启' : '已关闭'}</strong>
