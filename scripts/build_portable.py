@@ -46,6 +46,17 @@ start "" "..\\python\\pythonw.exe" -m desktop.app
 """
 
 #: Root launcher: the documented way in, shared by the one-file and split builds.
+#: Launch the MCP stdio server from the portable tree; hosts such as Doubao Work
+#: accept a command + args, so this keeps the setting to a single path.
+MCP_LAUNCHER = """@echo off
+setlocal
+set "ROOT=%~dp0"
+set "IELTS_COACH_MODELS=%ROOT%models"
+set "PYTHONPATH=%ROOT%app"
+set "PYTHONUTF8=1"
+"%ROOT%python\\python.exe" -m mcp_bridge.server %*
+"""
+
 ROOT_LAUNCHER = """@echo off
 chcp 65001 >nul
 cd /d "%~dp0"
@@ -187,6 +198,7 @@ def main() -> int:
         log("复制模型（体积大，可能需要几分钟）…")
         shutil.copytree(source, models_target)
     (BUILD / "启动口语教练.bat").write_text(ROOT_LAUNCHER, encoding="utf-8")
+    (BUILD / "ielts-mcp.bat").write_text(MCP_LAUNCHER, encoding="utf-8")
     # site-packages live inside app/python so the whole folder is relocatable
     if not args.skip_deps:
         install_deps(python)

@@ -51,6 +51,20 @@
 | Cursor / VS Code / Windsurf | 同上 + 扩展（状态栏 🎤、命令面板 `IELTS: 打开口语教练面板`） |
 | 任何 MCP 客户端 | `ielts-mcp`，调 `start_lesson` |
 
+## 在豆包工作里用
+
+豆包工作的「插件」支持**本地 STDIO MCP**，「技能」直接吃 `SKILL.md`：
+
+1. 左侧 **插件·技能·伙伴 → 插件 → + 添加 → 新建自定义连接器**
+   - 传输类型：**STDIO**
+   - 运行命令（便携版）：`<安装目录>\ielts-mcp.bat`
+   - 运行命令（源码版）：`<仓库>\.venv\Scripts\ielts-mcp.exe`
+   - 环境变量：`PYTHONUTF8` = `1`
+2. **技能 → + 添加 → 上传技能**，选 `skills/ielts-speaking-coach/` 文件夹
+3. 在豆包里说「开始练雅思 Part 1」
+
+如果客户端只支持 HTTP 连接器：填 **`http://127.0.0.1:8765/mcp`**（daemon 自带这个端点，不用额外进程）。
+
 ## 本机跑什么
 
 - 语音识别 faster-whisper（便携包内置 `small.en`）

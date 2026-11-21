@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.2.0 — 任意 agent 都能接
+
+### 新增
+
+- **MCP over HTTP**：daemon 自带 `http://127.0.0.1:8765/mcp`，支持 URL 型 MCP 的客户端（豆包工作、扣子等）不用再起 stdio 进程。
+- **`ielts-mcp.bat`**：便携版根目录多一个启动器，豆包工作填一条命令就能接本地 MCP。
+- 文档新增「在豆包工作里用」：插件填 STDIO 命令、技能上传 `SKILL.md`。
+
+### 技术
+
+- 把 MCP `streamable_http_app` 挂到 FastAPI 的 `/mcp`，在 daemon lifespan 里手动进入 `session_manager`（Starlette 的 mount 不会跑子应用 lifespan）。
+- 加了一段路径改写，让 `/mcp` 不经过 307 跳转（MCP 客户端不会重放 POST）。
+
 ## v1.1.0 — 说完了你说了算
 
 ### 变了什么

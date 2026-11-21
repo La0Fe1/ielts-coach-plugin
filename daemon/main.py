@@ -198,6 +198,10 @@ class DaemonContext:
         logger.info("模型预热完成: %s", self.warmup_state)
 
 
+#: The MCP bridge object, when mounted over HTTP in this process.
+_MCP_HTTP = None
+
+
 def create_app(settings: config.Settings | None = None) -> FastAPI:
     ctx = DaemonContext(settings)
     _configure_model_env(ctx.settings)
@@ -215,9 +219,22 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         task = None
         if ctx.settings.prewarm:
             task = asyncio.create_task(ctx.warmup())
+        # Mounted sub-apps do not get their lifespan run by Starlette, so the MCP
+        # session manager is entered here; without it /mcp answers 500.
+        mcp_cm = None
+        if _MCP_HTTP is not None:
+            try:
+                mcp_cm = _MCP_HTTP.session_manager.run()
+                await mcp_cm.__aenter__()
+                logger.info("MCP over HTTP 已就绪: /mcp")
+            except Exception as exc:  # noqa: BLE001 - HTTP MCP is optional
+                logger.warning("MCP over HTTP 启动失败: %s", exc)
+                mcp_cm = None
         try:
             yield
         finally:
+            if mcp_cm is not None:
+                await mcp_cm.__aexit__(None, None, None)
             if task:
                 task.cancel()
             ctx.db.close()
@@ -225,6 +242,34 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="IELTS Speaking Coach Daemon", version=config.VERSION, lifespan=lifespan)
     app.state.ctx = ctx
+
+    # MCP over HTTP: hosts that cannot spawn a local stdio process (Doubao Work,
+    # Coze, any URL-based MCP client) can point at http://127.0.0.1:<port>/mcp .
+    global _MCP_HTTP
+    try:
+        from mcp_bridge.server import mcp as bridge_mcp
+
+        app.mount(
+            "/mcp",
+            bridge_mcp.streamable_http_app(streamable_http_path="/", host="127.0.0.1"),
+        )
+        _MCP_HTTP = bridge_mcp
+    except Exception as exc:  # noqa: BLE001
+        _MCP_HTTP = None
+        logger.warning("MCP over HTTP 挂载失败（stdio 仍可用）: %s", exc)
+
+    @app.middleware("http")
+    async def _mcp_canonical_path(request, call_next):
+        """Serve /mcp without the trailing-slash redirect.
+
+        Starlette mounts answer /mcp with a 307 to /mcp/, and MCP clients do not
+        replay a POST across a redirect, so rewrite the path before routing.
+        """
+        if request.scope.get("path") == "/mcp":
+            request.scope["path"] = "/mcp/"
+            request.scope["raw_path"] = b"/mcp/"
+        return await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -256,6 +301,9 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             "espeak_ng": config.find_espeak_ng(),
             "question_bank": ctx.bank.question_count(),
             "hint_book": ctx.hints.stats(),
+            "mcp_http": (
+                f"http://{ctx.settings.host}:{ctx.settings.port}/mcp" if _MCP_HTTP else None
+            ),
             "db": ctx.db.stats(),
             "active_sessions": [s for s in ctx.registry.all_snapshots() if not s["ended"]],
             "companion_url": ctx.companion_url(),
