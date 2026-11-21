@@ -53,6 +53,26 @@ FILLERS = {
 #: absent on purpose: "I like it" and "Yes, I do" are complete answers.
 TRAILING_POS = {"DET", "ADP", "CCONJ", "SCONJ", "PART"}
 
+#: One-word replies that ARE complete: short answers and voice commands. Without
+#: this, "Yes." and "Stop." look like "too short" and the turn never ends.
+SHORT_ANSWERS = {
+    "yes", "yeah", "yep", "no", "nope", "sure", "ok", "okay", "right", "correct",
+    "done", "stop", "finish", "finished", "end", "bye", "thanks", "please",
+}
+
+#: Phrases that mean "end the lesson" (checked before completeness).
+STOP_PHRASES = {
+    "stop", "stop here", "let's stop", "lets stop", "end lesson", "end the lesson",
+    "finish", "i am done", "i'm done", "that's all", "that is all", "we can stop",
+    "no more", "bye", "goodbye", "see you",
+}
+
+
+def is_stop_command(transcript: str) -> bool:
+    """True when the learner is asking to end the lesson (English transcription)."""
+    text = (transcript or "").strip().lower().rstrip(".!?。！？ ")
+    return text in STOP_PHRASES
+
 _TOKEN_RE = re.compile(r"[A-Za-z']+")
 
 _nlp = None
@@ -93,6 +113,8 @@ def analyze(transcript: str, pause_sec: float = 0.0, stuck_after: float = 1.8) -
 
     if not cleaned:
         return _verdict(False, "empty", "还没有听到内容", pause_sec, stuck_after, 0.95)
+    if len(cleaned) == 1 and cleaned[-1].lower() in SHORT_ANSWERS:
+        return _verdict(True, "short_answer", "短回答也算完整", pause_sec, stuck_after, 0.9)
     if len(cleaned) < 2:
         return _verdict(False, "too_short", "只说了 " + cleaned[-1] + "，还没成句",
                         pause_sec, stuck_after, 0.9)

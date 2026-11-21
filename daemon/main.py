@@ -46,6 +46,7 @@ from .audio.pronunciation import build_service as build_pronunciation
 from .audio.tts import TTSService
 from .audio.vad import FRAME_SAMPLES, StreamingVAD, VADService, pcm16_to_float
 from .completeness import analyze as analyze_completeness
+from .completeness import is_stop_command
 from .db import Database
 from .hints import HintBook, analyze_stuck, used_words
 from .planner import LessonPlanner, QuestionBank
@@ -774,6 +775,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 "wpm": asr_result.get("wpm"),
                 "pauses": asr_result.get("long_pauses"),
                 "asr_reused": bool(asr_result.get("reused_from_probe")),
+                "intent": "end_lesson" if is_stop_command(asr_result.get("text", "")) else None,
             }
         )
         ctx.registry.deliver_reply(session_id, payload)
