@@ -125,7 +125,8 @@ def main() -> int:
         if part.stat().st_size > 2 * 1024**3:
             log(f"{part.name} 超过 2 GB")
             return 1
-    (DIST / "合并并解压.bat").write_text(MERGE_BAT, encoding="utf-8")
+    # ASCII name on purpose: GitHub rewrites non-ASCII asset filenames on upload.
+    (DIST / "merge-and-extract.bat").write_text(MERGE_BAT, encoding="utf-8")
     ok = verify(source, parts)
     source.unlink()  # parts are the deliverable
     return 0 if ok else 1

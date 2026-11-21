@@ -163,10 +163,15 @@ def zip_dir(source: Path, target: Path) -> Path:
     if target.exists():
         target.unlink()
     log(f"打包 {target.name}（可能几分钟）")
+    skip = {"get-pip.py", f"python-{PY_VERSION}-embed-amd64.zip"}
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path in source.rglob("*"):
-            if path.is_file():
-                archive.write(path, path.relative_to(source))
+            if not path.is_file():
+                continue
+            relative = path.relative_to(source)
+            if relative.parent == Path(".") and relative.name in skip:
+                continue  # build-time scaffolding, not part of the product
+            archive.write(path, relative)
     size = target.stat().st_size / (1024 * 1024)
     log(f"完成: {target} ({size:.0f} MB)")
     return target
