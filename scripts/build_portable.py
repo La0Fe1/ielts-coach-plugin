@@ -73,7 +73,17 @@ cd app
 start "" "..\\python\\pythonw.exe" -m desktop.app
 """
 
-README_TXT = "IELTS 口语教练（便携版）\n\n不需要安装 Python。解压后双击「启动口语教练.bat」即可。\n\n语音模型已内置（识别 / 发音评分 / 离线合成 / 断句），首次启动无需联网。\n题库在程序里，主界面点「开始语音连麦上课」直接开课。\n\n完整教练体验（语法纠错、逐题追问、课后报告）：\n  在 dsh / Cursor / Claude Code 里说「开始上课」，\n  由你本地开发工具里的大模型当老师，每次上课消耗你自己的 token。\n\n数据都在 %USERPROFILE%\\.ielts-coach ，删除该目录即清空所有记忆。\n"
+#: Root entry point: hook the coach into whatever agent the user already has.
+CONNECT_LAUNCHER = """@echo off
+chcp 65001 >nul
+cd /d "%~dp0"
+"%~dp0python\\python.exe" "%~dp0app\\connect_agent.py" %*
+echo.
+pause
+"""
+
+#: Kept in the package so the license text travels with it.
+README_TXT = "IELTS 口语教练（便携版）\r\n\r\n这个包是「身体」：听你说话、评发音、记错题、朗读题目。\r\n「脑子」是你电脑上的 AI 工具（Cursor / Claude Code / 豆包 / DeepSeek Harness）。\r\n\r\n三步开始：\r\n\r\n① 双击 连接我的AI工具.bat\r\n   自动把教练接入你已安装的 AI 工具，并装好技能。\r\n   用豆包的话，脚本最后会打印两步手动配置（2 分钟）。\r\n\r\n② 打开那个 AI 工具，说一句：「开始练雅思 Part 1」\r\n   桌面窗口会自动弹出，点一次「开始语音连麦上课」允许麦克风。\r\n\r\n③ 答完一题点「我说完了」；说到一半卡住 2 秒，它会先给你提示词。\r\n   说「结束本课」出四维报告；下次上课先复习上次的错。\r\n\r\n其他\r\n- 想单独打开窗口：双击 启动口语教练.bat\r\n- 语音模型和题库都在包里，离线可用；不需要安装 Python\r\n- 数据在 %USERPROFILE%\\.ielts-coach，删掉整个目录即清空记忆\r\n- 单独排查 MCP：双击 ielts-mcp.bat（正常会停在等待输入，关掉即可）\r\n"
 
 
 def log(message: str) -> None:
@@ -153,6 +163,9 @@ def copy_code(app_dir: Path) -> None:
         source = ROOT / name
         if source.exists():
             shutil.copy2(source, app_dir / name)
+    connector = ROOT / "portable" / "connect_agent.py"
+    if connector.is_file():
+        shutil.copy2(connector, app_dir / "connect_agent.py")
     (app_dir / "start.bat").write_text(STARTER, encoding="utf-8")
     (app_dir / "启动口语教练.bat").write_text(STARTER, encoding="utf-8")
     (app_dir / "README.txt").write_text(README_TXT, encoding="utf-8")
@@ -204,6 +217,7 @@ def main() -> int:
         shutil.copytree(source, models_target)
     (BUILD / "启动口语教练.bat").write_text(ROOT_LAUNCHER, encoding="utf-8")
     (BUILD / "ielts-mcp.bat").write_text(MCP_LAUNCHER, encoding="utf-8")
+    (BUILD / "连接我的AI工具.bat").write_text(CONNECT_LAUNCHER, encoding="utf-8")
     # site-packages live inside app/python so the whole folder is relocatable
     if not args.skip_deps:
         install_deps(python)
