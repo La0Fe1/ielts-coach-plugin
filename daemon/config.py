@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "ielts-coach"
-VERSION = "1.0.0"
+#: Keep in sync with pyproject.toml - tests/test_version.py enforces it.
+VERSION = "1.2.0"
 
 #: Sample rate mandated by the whole pipeline (browser recorder -> WAV -> models).
 TARGET_SAMPLE_RATE = 16_000
