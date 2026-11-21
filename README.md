@@ -31,7 +31,8 @@
    - `IELTS-Coach-full.zip.002`
    - `merge-and-extract.bat`（合并并解压的那个 bat）
 3. 双击 `merge-and-extract.bat`（用的是 Windows 自带的 `tar`，不用装 7-Zip）
-4. 双击 `启动口语教练.bat`
+4. 双击 `连接我的AI工具.bat` —— 自动把教练接进 Cursor / Claude Code / dsh，并装好技能；用豆包的话它会打印两步配置
+5. 在你的 AI 工具里说「开始练雅思 Part 1」，窗口自动弹出
 
 > Release 里还有一个轻量单文件包 `IELTS-Coach-portable-win64.zip`（1.4 GB，识别模型小一号）。
 > 只想快点看看长什么样，用那个；正常用上面那三个文件。
