@@ -5,9 +5,10 @@ name: release
 #   IELTS-Coach-portable-win64.zip  单文件轻量版（small.en），1.4 GB
 #   IELTS-Coach-app.zip             分体版：程序 + 运行时 + 发音模型
 #   IELTS-Coach-models-large.zip    分体版：distil-large-v3 + Kokoro
+# 自动 tag 构建先关掉：云端准备模型（下载 1.2 GB wav2vec2 并量化）不稳定，会在
+# "Prepare bundled models" 失败，看起来像产品出事，其实只影响打包。
+# 需要自动构建时在网页上手动 Run workflow，或修好脚本后再打开 push: tags。
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
