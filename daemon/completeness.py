@@ -62,9 +62,13 @@ SHORT_ANSWERS = {
 
 #: Phrases that mean "end the lesson" (checked before completeness).
 STOP_PHRASES = {
+    # English
     "stop", "stop here", "let's stop", "lets stop", "end lesson", "end the lesson",
     "finish", "i am done", "i'm done", "that's all", "that is all", "we can stop",
     "no more", "bye", "goodbye", "see you",
+    # Chinese (available once the ASR runs multilingual)
+    "结束", "结束吧", "下课", "下课吧", "不练了", "停止", "停", "够了", "拜拜",
+    "再见", "今天就到这", "今天就到这里",
 }
 
 
@@ -101,13 +105,34 @@ def _strip_fillers(words: list[str]) -> list[str]:
     return trimmed
 
 
-def analyze(transcript: str, pause_sec: float = 0.0, stuck_after: float = 1.8) -> dict[str, Any]:
+def analyze(
+    transcript: str,
+    pause_sec: float = 0.0,
+    stuck_after: float = 1.8,
+    language: str | None = "en",
+) -> dict[str, Any]:
     """Return {complete, reason, detail, stuck, confidence}.
 
     complete: the sentence can stand alone -> submit the turn
     stuck:    incomplete *and* the learner has gone quiet -> offer hints
     """
     text = (transcript or "").strip()
+
+    # Chinese (or any non-English) utterance: the English POS rules do not apply.
+    # Treat it as a finished turn so the agent can answer it - e.g. "这个单词怎么说"
+    # or "结束".
+    if language and language.lower() not in {"en", ""}:
+        detected = language.lower()
+        return {
+            "complete": True,
+            "reason": "non_english",
+            "detail": "非英文输入，交给 agent 处理",
+            "stuck": False,
+            "language": detected,
+            "pause_sec": round(float(pause_sec), 2),
+            "confidence": 0.7,
+        }
+
     words = _TOKEN_RE.findall(text)
     cleaned = _strip_fillers(words)
 

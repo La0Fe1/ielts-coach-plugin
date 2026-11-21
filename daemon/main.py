@@ -698,6 +698,10 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         )
 
         pronunciation = None
+        language = str(asr_result.get("language") or "en").lower()
+        if pron_prepared is not None and language not in {"en", ""}:
+            logger.info("检测到 %s 语音，跳过英文音素评分", language)
+            pron_prepared = None
         if pron_prepared is not None:
             try:
                 accent = ctx.db.get_profile().get("accent_preference", "uk")
@@ -775,6 +779,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 "wpm": asr_result.get("wpm"),
                 "pauses": asr_result.get("long_pauses"),
                 "asr_reused": bool(asr_result.get("reused_from_probe")),
+                "language": language,
                 "intent": "end_lesson" if is_stop_command(asr_result.get("text", "")) else None,
             }
         )
@@ -812,7 +817,11 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             )
             asr_result = ctx.asr.transcribe(info.path)
             transcript = (asr_result.get("text") or "").strip()
-            verdict = analyze_completeness(transcript, pause_sec=pause_sec)
+            verdict = analyze_completeness(
+                transcript,
+                pause_sec=pause_sec,
+                language=str(asr_result.get("language") or "en"),
+            )
             hints: list[str] = []
             if verdict["stuck"]:
                 try:
@@ -826,6 +835,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             return {
                 "transcript": transcript,
                 "word_count": len(transcript.split()),
+                "language": str(asr_result.get("language") or "en"),
                 **verdict,
                 "hint_words": hints,
                 "_asr": asr_result,

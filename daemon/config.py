@@ -434,6 +434,9 @@ class Settings:
     asr_model: str = "large-v3-turbo"
     asr_compute_type: str = "float16"
     asr_beam_size: int = 5
+    #: "auto" lets Whisper detect the spoken language (Chinese commands work),
+    #: "en" forces English for maximum accuracy on answers.
+    asr_language: str = "auto"
     #: Kokoro voices per accent (offline engine).
     tts_voices: dict[str, str] = field(
         default_factory=lambda: {"uk": "bf_emma", "us": "af_heart"}
@@ -594,6 +597,7 @@ def load_settings() -> Settings:
         device_name=hardware.device_name,
         asr_model=os.environ.get("IELTS_COACH_ASR_MODEL", "").strip() or asr_model,
         asr_compute_type=os.environ.get("IELTS_COACH_ASR_COMPUTE", "").strip() or compute_type,
+        asr_language=os.environ.get("IELTS_COACH_ASR_LANGUAGE", "").strip() or "auto",
         asr_beam_size=env_int("IELTS_COACH_ASR_BEAM", 5),
         tts_voices={
             "uk": os.environ.get("IELTS_COACH_VOICE_UK", "bf_emma").strip() or "bf_emma",

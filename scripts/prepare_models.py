@@ -26,7 +26,9 @@ MODELS = ROOT / "models"
 # Small English model: the distil-large fp16 checkpoint alone is 1.44 GB, which does
 # not fit a single 2 GB release asset next to the GOP and TTS models. Users who want
 # more accuracy can set IELTS_COACH_ASR_MODEL and let it download.
-ASR_REPO = "Systran/faster-whisper-small.en"
+# Multilingual small (same size as small.en): Chinese questions/commands are
+# transcribed too, which the "speak to stop / ask a word" flows need.
+ASR_REPO = "Systran/faster-whisper-small"
 GOP_REPO = "facebook/wav2vec2-xlsr-53-espeak-cv-ft"
 TTS_REPO = "hexgrad/Kokoro-82M"
 

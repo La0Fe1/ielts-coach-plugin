@@ -264,13 +264,20 @@ class ASRService:
         samples, _rate = read_wav(wav_path, config.TARGET_SAMPLE_RATE)
         return samples.astype("float32", copy=False)
 
-    def transcribe(self, wav_path: str | Path) -> dict[str, Any]:
-        started = time.time()
-        model = self.load()
-        audio = self._load_audio(wav_path)
-        segments, info = model.transcribe(
+    @staticmethod
+    def _looks_english(words: list[dict[str, Any]]) -> bool:
+        """Guard against a wrong language guess on a long English answer."""
+        joined = " ".join(str(word.get("word") or "") for word in words)
+        letters = [ch for ch in joined if ch.isalpha()]
+        if not letters:
+            return True
+        ascii_ratio = sum(1 for ch in letters if ch.isascii()) / len(letters)
+        return ascii_ratio >= 0.8
+
+    def _run(self, model, audio, language: str | None):
+        return model.transcribe(
             audio,
-            language="en",
+            language=language,
             beam_size=self.settings.asr_beam_size,
             word_timestamps=True,
             # Silence filtering collapses the pauses between words, which is exactly
@@ -281,6 +288,7 @@ class ASRService:
             condition_on_previous_text=False,
         )
 
+    def _collect(self, segments) -> tuple[str, list[dict[str, Any]]]:
         words: list[dict[str, Any]] = []
         texts: list[str] = []
         for segment in segments:
@@ -294,8 +302,32 @@ class ASRService:
                         "probability": round(float(getattr(word, "probability", 0.0) or 0.0), 3),
                     }
                 )
+        return " ".join(t for t in texts if t).strip(), words
 
-        transcript = " ".join(t for t in texts if t).strip()
+    def transcribe(self, wav_path: str | Path) -> dict[str, Any]:
+        started = time.time()
+        model = self.load()
+        audio = self._load_audio(wav_path)
+
+        forced = (self.settings.asr_language or "auto").lower()
+        detected: str | None = None
+        if forced == "auto":
+            # Let Whisper pick the language so Chinese questions/commands are
+            # transcribed too. Long answers are re-run forced-English when the
+            # detection looks wrong: the IELTS answer itself must never be mangled.
+            segments, info = self._run(model, audio, None)
+            detected = str(getattr(info, "language", "") or "").lower() or None
+            transcript, words = self._collect(segments)
+            if detected and detected != "en" and len(words) >= 12 and self._looks_english(words):
+                logger.info("语言检测为 %s 但内容是英文，强制按英文重跑", detected)
+                segments, info = self._run(model, audio, "en")
+                detected = "en"
+                transcript, words = self._collect(segments)
+        else:
+            segments, info = self._run(model, audio, forced)
+            detected = forced
+            transcript, words = self._collect(segments)
+
         duration = float(getattr(info, "duration", 0.0) or 0.0)
         if duration <= 0 and words:
             duration = words[-1]["end"]
@@ -321,7 +353,7 @@ class ASRService:
             "text": transcript or " ".join(w["word"] for w in words).strip(),
             "words": words,
             "duration_sec": round(duration, 2),
-            "language": getattr(info, "language", "en"),
+            "language": detected or str(getattr(info, "language", "en") or "en"),
             "asr_elapsed_sec": elapsed,
             "model": self.model_name,
             **{k: v for k, v in fluency.items() if k != "words"},
