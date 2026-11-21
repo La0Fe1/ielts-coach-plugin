@@ -16,9 +16,9 @@
 
 - `IELTS-Coach-full.zip.001`（1800 MB）
 - `IELTS-Coach-full.zip.002`（539 MB）
-- `合并并解压.bat`
+- `merge-and-extract.bat`
 
-双击 `合并并解压.bat`（用 Windows 自带的 tar，不需要 7-Zip），然后双击 `启动口语教练.bat`。
+双击 `merge-and-extract.bat`（用 Windows 自带的 tar，不需要 7-Zip），然后双击 `启动口语教练.bat`。
 
 > 只想快速看看：`IELTS-Coach-portable-win64.zip`（1.4 GB，单文件，识别模型小一号）。
 
