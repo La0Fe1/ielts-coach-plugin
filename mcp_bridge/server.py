@@ -163,7 +163,7 @@ def launch_desktop_window(session_id: int | None) -> bool:
         return False
 
 
-async def ensure_daemon(auto_spawn: bool = True, wait_seconds: float = 90.0) -> dict[str, Any]:
+async def ensure_daemon(auto_spawn: bool = True, wait_seconds: float = 30.0) -> dict[str, Any]:
     """Return daemon health, starting the daemon if necessary."""
     health = await daemon_alive()
     if health:
@@ -190,8 +190,13 @@ async def ensure_daemon(auto_spawn: bool = True, wait_seconds: float = 90.0) -> 
             tail = log_path.read_text(encoding="utf-8", errors="replace")[-1200:]
         except OSError:
             pass
+        # A host (Doubao, Cursor) gives a tool call a limited budget; hanging for
+        # 90 s reads as "tool unavailable". Fail fast with something the model can
+        # act on - wait a few seconds and call again.
         raise RuntimeError(
-            f"daemon 启动超时（{wait_seconds:.0f}s）。请查看日志 {log_path}\n{tail}"
+            f"本地服务还在启动（已等 {wait_seconds:.0f}s，模型预热约 20s）。"
+            "请等 20 秒后重试一次 daemon_status，不要重复开课。"
+            f"日志: {log_path}\n{tail}"
         )
 
 
