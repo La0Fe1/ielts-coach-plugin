@@ -548,6 +548,10 @@ def apply_bundled_models() -> str | None:
         return None
     hf_home = root / "hf"
     if hf_home.is_dir():
+        # HF_HUB_CACHE points straight at the directory holding models--*; HF_HOME
+        # would instead expect a "hub/" child and silently miss the bundled models
+        # (the portable build then fell back to downloading and failed offline).
+        os.environ.setdefault("HF_HUB_CACHE", str(hf_home))
         os.environ.setdefault("HF_HOME", str(hf_home))
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")

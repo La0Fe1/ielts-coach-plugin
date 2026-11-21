@@ -12,6 +12,7 @@ without downloading a 1.5 GB checkpoint.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -215,12 +216,19 @@ class ASRService:
                     self.settings.device,
                     self.settings.asr_compute_type,
                 )
+                # The portable build ships a ready HF cache; download_root must point
+                # at it, otherwise faster-whisper looks in ~/.ielts-coach/models and,
+                # being offline, fails with "cannot find a cached snapshot".
+                bundled = os.environ.get("IELTS_COACH_MODELS", "").strip()
+                download_root = (
+                    str(Path(bundled) / "hf") if bundled else str(self.settings.paths.models_dir)
+                )
                 self._model = WhisperModel(
                     name,
                     device=self.settings.device,
                     compute_type=self.settings.asr_compute_type,
-                    download_root=str(self.settings.paths.models_dir),
-                    local_files_only=False,
+                    download_root=download_root,
+                    local_files_only=bool(bundled),
                 )
                 self._load_error = None
                 self._load_seconds = round(time.time() - started, 2)
