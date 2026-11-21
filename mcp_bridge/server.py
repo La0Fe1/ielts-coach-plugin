@@ -236,6 +236,62 @@ async def _request(
         return {"ok": True, "raw": response.text}
 
 
+def _compact_pronunciation(pron: dict[str, Any]) -> dict[str, Any]:
+    """Keep only what the model needs to phrase a correction.
+
+    The full result carries per-word phoneme traces (~13 KB for a 30-word answer,
+    i.e. thousands of tokens per turn). The desktop UI already has the detail, so
+    the agent only gets the overall score plus the words that actually need work.
+    """
+    flagged: list[dict[str, Any]] = []
+    for word in pron.get("words") or []:
+        issues = word.get("issues") or []
+        if word.get("color") not in {"red", "amber"} and not issues:
+            continue
+        flagged.append(
+            {
+                "word": word.get("word"),
+                "score": word.get("score"),
+                "color": word.get("color"),
+                "ipa": word.get("ipa"),
+                "issues": [
+                    {
+                        "phoneme": issue.get("phoneme"),
+                        "heard": issue.get("likely_pronounced_as"),
+                        "gop": issue.get("gop_score"),
+                    }
+                    for issue in issues[:3]
+                ],
+            }
+        )
+    weak = [
+        {"phoneme": item.get("phoneme"), "avg_score": item.get("avg_score"), "count": item.get("count")}
+        for item in (pron.get("weak_phonemes") or [])[:3]
+    ]
+    return {
+        "overall_score": pron.get("overall_score"),
+        "flagged": flagged[:8],
+        "weak_phonemes": weak,
+        "detail": "完整音素明细只在桌面窗口里展示",
+    }
+
+
+def _compact_turn(payload: dict[str, Any]) -> dict[str, Any]:
+    """Shrink a wait payload before it becomes model input."""
+    if not isinstance(payload, dict):
+        return payload
+    compact = dict(payload)
+    pronunciation = compact.get("pronunciation")
+    if isinstance(pronunciation, dict):
+        compact["pronunciation"] = _compact_pronunciation(pronunciation)
+    turn = compact.get("turn")
+    if isinstance(turn, dict) and isinstance(turn.get("pronunciation_json"), dict):
+        turn = dict(turn)
+        turn["pronunciation_json"] = _compact_pronunciation(turn["pronunciation_json"])
+        compact["turn"] = turn
+    return compact
+
+
 async def _wait_for_turn(session_id: int, timeout_sec: int) -> dict[str, Any]:
     capped = max(1, min(int(timeout_sec or MAX_WAIT), MAX_WAIT))
     result = await _request(
@@ -248,7 +304,7 @@ async def _wait_for_turn(session_id: int, timeout_sec: int) -> dict[str, Any]:
         return result
     result.setdefault("session_id", session_id)
     result["waited_timeout_sec"] = capped
-    return result
+    return _compact_turn(result)
 
 
 # --------------------------------------------------------------------------- #

@@ -16,13 +16,25 @@ import os
 import re
 import sys
 import time
+import uuid
 
 import numpy as np
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Body,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -201,6 +213,17 @@ class DaemonContext:
 
 #: The MCP bridge object, when mounted over HTTP in this process.
 _MCP_HTTP = None
+
+#: probe_id -> {asr, duration, ts}. The live turn-taking probe already transcribed
+#: the sentence, so the final upload can skip ASR when the audio is the same length.
+_PROBE_CACHE: dict[str, dict[str, Any]] = {}
+_PROBE_TTL_SEC = 180.0
+
+
+def _prune_probe_cache() -> None:
+    cutoff = time.time() - _PROBE_TTL_SEC
+    for key in [k for k, v in _PROBE_CACHE.items() if v.get("ts", 0) < cutoff]:
+        _PROBE_CACHE.pop(key, None)
 
 
 def create_app(settings: config.Settings | None = None) -> FastAPI:
@@ -571,6 +594,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         session_id: int,
         request: Request,
         file: UploadFile | None = File(default=None),
+        probe_id: str = Form(default=""),
     ) -> dict[str, Any]:
         session = ctx.db.get_session(session_id)
         if not session:
@@ -602,18 +626,30 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         state.set_status("processing", last_error=None)
         # ASR and the acoustic phoneme forward pass are independent: run both at once,
         # then only the cheap forced alignment has to wait for the transcript.
-        asr_future = loop.run_in_executor(None, ctx.asr.transcribe, info.path)
+        # The live probe already transcribed this sentence; reuse it when the audio
+        # is the same length, which saves one ASR pass (~300 ms) per turn.
+        _prune_probe_cache()
+        cached = _PROBE_CACHE.get(probe_id) if probe_id else None
         pron_future = loop.run_in_executor(None, ctx.pron.prepare, info.path)
-        try:
-            asr_result = await asr_future
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("ASR 失败")
+        if cached and abs(float(cached.get("duration", 0.0)) - info.duration_sec) <= 1.8:
+            asr_result = dict(cached["asr"])
+            asr_result["reused_from_probe"] = True
             try:
                 await pron_future
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - pronunciation stays best-effort
                 pass
-            ctx.registry.mark_cancel(session_id)
-            raise HTTPException(500, f"语音识别失败: {exc}") from exc
+        else:
+            asr_future = loop.run_in_executor(None, ctx.asr.transcribe, info.path)
+            try:
+                asr_result = await asr_future
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("ASR 失败")
+                try:
+                    await pron_future
+                except Exception:  # noqa: BLE001
+                    pass
+                ctx.registry.mark_cancel(session_id)
+                raise HTTPException(500, f"语音识别失败: {exc}") from exc
 
         pron_prepared = None
         try:
@@ -737,6 +773,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 "duration_sec": info.duration_sec,
                 "wpm": asr_result.get("wpm"),
                 "pauses": asr_result.get("long_pauses"),
+                "asr_reused": bool(asr_result.get("reused_from_probe")),
             }
         )
         ctx.registry.deliver_reply(session_id, payload)
@@ -789,9 +826,23 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 "word_count": len(transcript.split()),
                 **verdict,
                 "hint_words": hints,
+                "_asr": asr_result,
+                "_duration": info.duration_sec,
             }
 
-        return await loop.run_in_executor(None, _work)
+        outcome = await loop.run_in_executor(None, _work)
+        asr_payload = outcome.pop("_asr", None)
+        duration = outcome.pop("_duration", 0.0)
+        if asr_payload is not None:
+            _prune_probe_cache()
+            probe_id = uuid.uuid4().hex
+            _PROBE_CACHE[probe_id] = {
+                "asr": asr_payload,
+                "duration": float(duration or 0.0),
+                "ts": time.time(),
+            }
+            outcome["probe_id"] = probe_id
+        return outcome
 
     # ------------------------------------------------------------------ #
     # Feedback / end / report

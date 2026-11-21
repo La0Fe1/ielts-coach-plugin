@@ -24,6 +24,8 @@ export interface UtteranceResult {
   speechSec: number
   reason: string
   enoughSpeech: boolean
+  /** Set when the last probe already transcribed this sentence (saves an ASR pass). */
+  probeId?: string
 }
 
 export interface LiveCallbacks {
@@ -39,6 +41,7 @@ export interface LiveCallbacks {
 }
 
 export interface ProbeResult {
+  probe_id?: string
   transcript?: string
   complete?: boolean
   reason?: string
@@ -79,6 +82,7 @@ export class LiveUtterance {
   private guard: number | undefined
   private probing = false
   private lastProbeSilence = 0
+  private lastProbeId?: string
 
   constructor(sessionId: number, callbacks: LiveCallbacks = {}) {
     this.sessionId = sessionId
@@ -178,6 +182,7 @@ export class LiveUtterance {
       const result = (await response.json()) as ProbeResult
       if (this.finished) return
       this.callbacks.onProbe?.(result)
+      if (result.probe_id) this.lastProbeId = result.probe_id
       if (result.complete) {
         this.stopReason = 'complete'
         void this.finish(false)
@@ -263,6 +268,7 @@ export class LiveUtterance {
         speechSec: Math.max(this.speechSec, 0),
         reason: this.stopReason,
         enoughSpeech: !silent && (this.speechSec >= 0.25 || result.durationSec >= 0.35),
+        probeId: this.lastProbeId,
       })
     } catch (error) {
       this.callbacks.onError?.(String(error))

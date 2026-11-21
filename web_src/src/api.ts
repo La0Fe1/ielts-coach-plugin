@@ -80,9 +80,10 @@ export const api = {
     getJSON<{ url: string; duration_sec?: number }>(
       `/api/tts/say?text=${encodeURIComponent(text)}&accent=${accent}`,
     ),
-  uploadAudio: async (sessionId: number, blob: Blob): Promise<TurnReply> => {
+  uploadAudio: async (sessionId: number, blob: Blob, probeId?: string): Promise<TurnReply> => {
     const form = new FormData()
     form.append('file', blob, 'turn.wav')
+    if (probeId) form.append('probe_id', probeId)
     const response = await fetch(`/api/sessions/${sessionId}/audio`, { method: 'POST', body: form })
     return parse<TurnReply>(response)
   },

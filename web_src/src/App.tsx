@@ -290,7 +290,7 @@ export default function App() {
       if (sessionIdRef.current === id) setPhase('thinking')
     }, 650)
     try {
-      const reply = await api.uploadAudio(id, result.blob)
+      const reply = await api.uploadAudio(id, result.blob, result.probeId)
       if (sessionIdRef.current !== id) return
       setPendingTranscript(reply.transcript ?? '')
       await refreshTurns(id)
