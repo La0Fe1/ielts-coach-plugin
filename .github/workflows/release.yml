@@ -23,7 +23,8 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install -U pip
-          python -m pip install huggingface_hub torch transformers
+          # prepare_models.py needs: hub download, torch quantisation, silero-vad copy
+          python -m pip install huggingface_hub torch transformers torchaudio silero-vad numpy soundfile
 
       - name: Prepare bundled models
         run: python scripts/prepare_models.py
