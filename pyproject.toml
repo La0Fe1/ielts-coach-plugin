@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ielts-coach"
+version = "1.0.0"
+description = "Local IELTS Speaking Coach: desktop window + MCP bridge + audio daemon, works from any coding agent"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "IELTS Coach" }]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "websockets>=12.0",
+    "soundfile>=0.12",
+    "httpx>=0.27",
+    "mcp[cli]>=1.2.0",
+    "numpy>=1.26",
+    "python-multipart>=0.0.9",
+    # The product is a desktop app, not a web page: pywebview hosts the UI in a real
+    # window through WebView2 (Windows) / WebKit (macOS) / GTK (Linux).
+    "pywebview>=5.0",
+]
+
+[project.optional-dependencies]
+# Heavy local-model stack (Phase 1 audio base + Phase 2 GOP engine).
+models = [
+    "faster-whisper>=1.0.0",
+    "kokoro>=0.9.4",
+    "torch>=2.2",
+    "torchaudio>=2.2",
+]
+phase2 = [
+    "transformers>=4.40",
+    "phonemizer>=3.2",
+    "g2p_en>=2.1",
+    # Force alignment uses torchaudio.functional.forced_align with a numpy Viterbi
+    # fallback; the ctc-forced-aligner package was never imported and has no Windows
+    # wheel (it broke the portable build).
+]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+ielts-daemon = "daemon.main:main"
+ielts-mcp = "mcp_bridge.server:main"
+ielts-coach = "desktop.app:main"
+
+[tool.setuptools]
+packages = ["daemon", "daemon.audio", "mcp_bridge", "desktop"]
+
+[tool.setuptools.package-data]
+daemon = ["content/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning"]

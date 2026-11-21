@@ -1,0 +1,79 @@
+name: release
+
+# Artifacts:
+#   IELTS-Coach-full.zip.001/.002   完整版（distil-large-v3），分卷，合并后解压
+#   IELTS-Coach-portable-win64.zip  单文件轻量版（small.en），1.4 GB
+#   IELTS-Coach-app.zip             分体版：程序 + 运行时 + 发音模型
+#   IELTS-Coach-models-large.zip    分体版：distil-large-v3 + Kokoro
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  portable:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install huggingface_hub torch transformers
+
+      - name: Prepare bundled models
+        run: python scripts/prepare_models.py
+
+      - name: Prepare large ASR model
+        run: |
+          python -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-distil-whisper-large-v3', cache_dir='models-large/hf')"
+
+      - name: Build one-file portable (small.en)
+        run: python scripts/build_portable.py --with-models
+
+      - name: Build split archives
+        run: python scripts/build_split.py
+
+      - name: Build multipart full package (distil-large-v3)
+        run: python scripts/build_multipart.py
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ielts-coach-release
+          path: dist/*
+          retention-days: 30
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/IELTS-Coach-full.zip.001
+            dist/IELTS-Coach-full.zip.002
+            dist/合并并解压.bat
+            dist/IELTS-Coach-portable-win64.zip
+            dist/IELTS-Coach-app.zip
+            dist/IELTS-Coach-models-large.zip
+          body: |
+            ## 下载
+
+            ### 完整版（推荐，识别最准）
+            下载这三个文件，放在**同一个文件夹**：
+            - IELTS-Coach-full.zip.001
+            - IELTS-Coach-full.zip.002
+            - 合并并解压.bat
+
+            双击 合并并解压.bat（Windows 自带 tar，不需要 7-Zip），然后双击 启动口语教练.bat。
+
+            ### 轻量版（一个文件，1.4 GB）
+            IELTS-Coach-portable-win64.zip，解压即用，识别模型 small.en。
+
+            ### 分体版（识别准确，适合网速不稳）
+            IELTS-Coach-app.zip + IELTS-Coach-models-large.zip，两个都解压到同一文件夹。
+
+            机器上不需要安装 Python，语音模型与题库都在包里，首次启动不联网。

@@ -1,0 +1,604 @@
+{
+  "version": 1,
+  "note": "IELTS Speaking question bank. Add or edit freely; ids must stay unique. topic/tags drive rotation and review weighting.",
+  "part1": [
+    {
+      "id": "p1_hometown",
+      "topic": "Hometown",
+      "topic_zh": "家乡",
+      "tags": ["place", "personal"],
+      "questions": [
+        "Where is your hometown?",
+        "What do you like most about your hometown?",
+        "Has your hometown changed much in recent years?",
+        "Would you like to live there in the future?",
+        "Is your hometown a good place for young people?"
+      ]
+    },
+    {
+      "id": "p1_work_study",
+      "topic": "Work or Study",
+      "topic_zh": "工作/学习",
+      "tags": ["daily", "personal"],
+      "questions": [
+        "Do you work or are you a student?",
+        "What do you enjoy most about your work or studies?",
+        "Is there anything you would like to change about it?",
+        "Do you prefer working alone or in a team?",
+        "What skills do you need to improve for your job?"
+      ]
+    },
+    {
+      "id": "p1_technology",
+      "topic": "Technology",
+      "topic_zh": "科技",
+      "tags": ["technology", "society"],
+      "questions": [
+        "How often do you use your phone?",
+        "What app do you use the most, and why?",
+        "Do you think technology makes life simpler or more complicated?",
+        "Is there any technology you would not want to live without?",
+        "Do older people in your family use technology much?"
+      ]
+    },
+    {
+      "id": "p1_food",
+      "topic": "Food and Cooking",
+      "topic_zh": "饮食",
+      "tags": ["food", "daily"],
+      "questions": [
+        "What kind of food do you like most?",
+        "Do you prefer eating at home or in a restaurant?",
+        "Can you cook? Who taught you?",
+        "Have your eating habits changed since you were a child?",
+        "Is there any food you dislike?"
+      ]
+    },
+    {
+      "id": "p1_weather",
+      "topic": "Weather and Seasons",
+      "topic_zh": "天气",
+      "tags": ["daily", "nature"],
+      "questions": [
+        "What is the weather like in your city?",
+        "Which season do you like best?",
+        "Does the weather affect your mood?",
+        "Do you check the weather forecast every day?",
+        "Has the weather changed compared with ten years ago?"
+      ]
+    },
+    {
+      "id": "p1_transport",
+      "topic": "Transport",
+      "topic_zh": "交通",
+      "tags": ["daily", "city"],
+      "questions": [
+        "How do you usually travel to work or school?",
+        "Is public transport good in your city?",
+        "Have you ever been stuck in traffic for a long time?",
+        "Would you like to buy a car in the future?",
+        "Do you enjoy walking or cycling?"
+      ]
+    },
+    {
+      "id": "p1_books",
+      "topic": "Reading and Books",
+      "topic_zh": "阅读",
+      "tags": ["hobby", "study"],
+      "questions": [
+        "Do you enjoy reading?",
+        "What kind of books do you like?",
+        "When did you start reading regularly?",
+        "Do you prefer paper books or e-books?",
+        "Is reading still popular among young people?"
+      ]
+    },
+    {
+      "id": "p1_music",
+      "topic": "Music",
+      "topic_zh": "音乐",
+      "tags": ["hobby", "leisure"],
+      "questions": [
+        "What kind of music do you like?",
+        "Do you listen to music while working or studying?",
+        "Have you ever learned to play an instrument?",
+        "When do you usually listen to music?",
+        "Would you like to go to a concert?"
+      ]
+    },
+    {
+      "id": "p1_sports",
+      "topic": "Sports and Exercise",
+      "topic_zh": "运动",
+      "tags": ["health", "hobby"],
+      "questions": [
+        "Do you do any sport or exercise?",
+        "How often do you exercise?",
+        "Is there a sport you would like to learn?",
+        "Do you prefer watching or playing sports?",
+        "Do people in your country exercise enough?"
+      ]
+    },
+    {
+      "id": "p1_travel",
+      "topic": "Travel",
+      "topic_zh": "旅行",
+      "tags": ["travel", "leisure"],
+      "questions": [
+        "Do you like travelling?",
+        "What kind of places do you prefer to visit?",
+        "Do you prefer travelling alone or with others?",
+        "What is the best place you have visited?",
+        "Do you want to travel abroad in the future?"
+      ]
+    },
+    {
+      "id": "p1_shopping",
+      "topic": "Shopping",
+      "topic_zh": "购物",
+      "tags": ["daily", "consumer"],
+      "questions": [
+        "Do you enjoy shopping?",
+        "Do you prefer shopping online or in shops?",
+        "How often do you buy clothes?",
+        "Was shopping important to you when you were younger?",
+        "Do you ever buy things you do not need?"
+      ]
+    },
+    {
+      "id": "p1_family",
+      "topic": "Family",
+      "topic_zh": "家庭",
+      "tags": ["personal", "people"],
+      "questions": [
+        "How many people are there in your family?",
+        "Do you spend much time with your family?",
+        "Who are you closest to in your family?",
+        "Has your family changed in the last few years?",
+        "Do you look like anyone in your family?"
+      ]
+    },
+    {
+      "id": "p1_friends",
+      "topic": "Friends",
+      "topic_zh": "朋友",
+      "tags": ["people", "personal"],
+      "questions": [
+        "Do you have a large circle of friends?",
+        "How did you meet your best friend?",
+        "Is it easy to make new friends where you live?",
+        "Do you prefer a few close friends or many acquaintances?",
+        "Have your friendships changed since you started working?"
+      ]
+    },
+    {
+      "id": "p1_daily_routine",
+      "topic": "Daily Routine",
+      "topic_zh": "日常作息",
+      "tags": ["daily", "time"],
+      "questions": [
+        "What is your usual routine on a weekday?",
+        "Are you a morning person or a night owl?",
+        "Has your routine changed recently?",
+        "What would you like to change about your routine?",
+        "Do you plan your day in advance?"
+      ]
+    },
+    {
+      "id": "p1_sleep",
+      "topic": "Sleep",
+      "topic_zh": "睡眠",
+      "tags": ["health", "daily"],
+      "questions": [
+        "How many hours do you sleep at night?",
+        "Do you ever feel sleepy during the day?",
+        "Do you take naps?",
+        "What helps you fall asleep?",
+        "Is sleep important for people your age?"
+      ]
+    },
+    {
+      "id": "p1_photography",
+      "topic": "Photography",
+      "topic_zh": "拍照",
+      "tags": ["hobby", "technology"],
+      "questions": [
+        "Do you like taking photos?",
+        "Do you prefer taking photos with a phone or a camera?",
+        "Do you ever print your photos?",
+        "What do you usually photograph?",
+        "Do you think people take too many photos today?"
+      ]
+    },
+    {
+      "id": "p1_animals",
+      "topic": "Animals and Pets",
+      "topic_zh": "动物",
+      "tags": ["nature", "personal"],
+      "questions": [
+        "Do you have a pet?",
+        "Are pets common in your country?",
+        "What animals do you like?",
+        "Did you like animals when you were a child?",
+        "Do you think it is good for children to grow up with pets?"
+      ]
+    },
+    {
+      "id": "p1_holidays",
+      "topic": "Holidays and Festivals",
+      "topic_zh": "节日",
+      "tags": ["culture", "leisure"],
+      "questions": [
+        "Which festival do you like most?",
+        "How do you usually spend public holidays?",
+        "Do you prefer long holidays or several short ones?",
+        "Has the way people celebrate changed?",
+        "Would you like to experience a festival in another country?"
+      ]
+    }
+  ],
+  "part2": [
+    {
+      "id": "p2_memorable_trip",
+      "topic": "Travel",
+      "topic_zh": "难忘的旅行",
+      "tags": ["travel", "story"],
+      "title": "Describe a memorable trip you have taken.",
+      "bullets": ["where you went", "who you went with", "what you did there", "and explain why it was memorable"],
+      "follow_ups": ["Do you prefer travelling alone or in a group?", "What makes a trip successful?"]
+    },
+    {
+      "id": "p2_skilled_person",
+      "topic": "People",
+      "topic_zh": "有技能的人",
+      "tags": ["people", "story"],
+      "title": "Describe a person who is very good at something.",
+      "bullets": ["who the person is", "what they are good at", "how you know them", "and explain why you admire their skill"],
+      "follow_ups": ["Are people born with talent or is skill learned?"]
+    },
+    {
+      "id": "p2_useful_app",
+      "topic": "Technology",
+      "topic_zh": "有用的应用",
+      "tags": ["technology", "daily"],
+      "title": "Describe an app or a piece of technology you find very useful.",
+      "bullets": ["what it is", "how you found out about it", "how often you use it", "and explain why it is useful to you"],
+      "follow_ups": ["Do you think people rely too much on apps?"]
+    },
+    {
+      "id": "p2_favourite_meal",
+      "topic": "Food",
+      "topic_zh": "最喜欢的一餐",
+      "tags": ["food", "memory"],
+      "title": "Describe a meal you will never forget.",
+      "bullets": ["what you ate", "where and when it was", "who you were with", "and explain why you remember it"],
+      "follow_ups": ["Do people in your country cook at home often?"]
+    },
+    {
+      "id": "p2_place_to_relax",
+      "topic": "Places",
+      "topic_zh": "放松的地方",
+      "tags": ["place", "leisure"],
+      "title": "Describe a place where you like to relax.",
+      "bullets": ["where it is", "how often you go there", "what you do there", "and explain why it helps you relax"],
+      "follow_ups": ["Do people today have enough time to relax?"]
+    },
+    {
+      "id": "p2_skill_learned",
+      "topic": "Learning",
+      "topic_zh": "学会的技能",
+      "tags": ["learning", "story"],
+      "title": "Describe a skill you learned recently.",
+      "bullets": ["what the skill is", "why you decided to learn it", "how you learned it", "and explain how you felt when you could do it"],
+      "follow_ups": ["Is it easier to learn new skills when you are young?"]
+    },
+    {
+      "id": "p2_old_object",
+      "topic": "Objects",
+      "topic_zh": "旧物",
+      "tags": ["objects", "memory"],
+      "title": "Describe an object you have kept for a long time.",
+      "bullets": ["what it is", "when you got it", "where you keep it", "and explain why you have kept it"],
+      "follow_ups": ["Do young people keep old things today?"]
+    },
+    {
+      "id": "p2_movie_book",
+      "topic": "Media",
+      "topic_zh": "电影/书",
+      "tags": ["media", "culture"],
+      "title": "Describe a film or a book that impressed you.",
+      "bullets": ["what it was about", "when you watched or read it", "who recommended it", "and explain why it impressed you"],
+      "follow_ups": ["Do people read less than before?"]
+    },
+    {
+      "id": "p2_interesting_job",
+      "topic": "Work",
+      "topic_zh": "有趣的工作",
+      "tags": ["work", "people"],
+      "title": "Describe a job you think is interesting.",
+      "bullets": ["what the job is", "what people do in it", "what skills it needs", "and explain why you find it interesting"],
+      "follow_ups": ["What jobs will disappear in the future?"]
+    },
+    {
+      "id": "p2_public_place",
+      "topic": "City Life",
+      "topic_zh": "公共空间",
+      "tags": ["place", "city"],
+      "title": "Describe a public place in your city that you enjoy visiting.",
+      "bullets": ["where it is", "what people do there", "when you usually go", "and explain why you like it"],
+      "follow_ups": ["Do cities need more public spaces?"]
+    },
+    {
+      "id": "p2_helping_someone",
+      "topic": "People",
+      "topic_zh": "帮助别人",
+      "tags": ["people", "story"],
+      "title": "Describe a time when you helped someone.",
+      "bullets": ["who you helped", "what the situation was", "how you helped", "and explain how you felt about it"],
+      "follow_ups": ["Should children be taught to help others?"]
+    },
+    {
+      "id": "p2_childhood_game",
+      "topic": "Childhood",
+      "topic_zh": "童年游戏",
+      "tags": ["childhood", "hobby"],
+      "title": "Describe a game you enjoyed playing when you were a child.",
+      "bullets": ["what the game was", "who you played with", "how you played it", "and explain why you enjoyed it"],
+      "follow_ups": ["Do children today play outside enough?"]
+    },
+    {
+      "id": "p2_exciting_news",
+      "topic": "News",
+      "topic_zh": "好消息",
+      "tags": ["news", "story"],
+      "title": "Describe a piece of good news you heard recently.",
+      "bullets": ["what the news was", "how you heard it", "who was involved", "and explain why it was good news"],
+      "follow_ups": ["How do people get news today?"]
+    },
+    {
+      "id": "p2_habit",
+      "topic": "Habits",
+      "topic_zh": "好习惯",
+      "tags": ["daily", "health"],
+      "title": "Describe a good habit you have or would like to have.",
+      "bullets": ["what the habit is", "how you started it", "how it helps you", "and explain how you keep it going"],
+      "follow_ups": ["Why is it hard to build new habits?"]
+    },
+    {
+      "id": "p2_person_you_admire",
+      "topic": "People",
+      "topic_zh": "敬佩的人",
+      "tags": ["people", "personal"],
+      "title": "Describe someone you admire.",
+      "bullets": ["who the person is", "how you know about them", "what they have done", "and explain why you admire them"],
+      "follow_ups": ["Do young people have good role models today?"]
+    },
+    {
+      "id": "p2_crowded_place",
+      "topic": "Places",
+      "topic_zh": "拥挤的地方",
+      "tags": ["place", "city"],
+      "title": "Describe a crowded place you have been to.",
+      "bullets": ["where it was", "why you went there", "what the crowd was like", "and explain how you felt about it"],
+      "follow_ups": ["Do you enjoy crowded events?"]
+    },
+    {
+      "id": "p2_learning_english",
+      "topic": "Learning",
+      "topic_zh": "学英语",
+      "tags": ["learning", "study"],
+      "title": "Describe how you have been learning English.",
+      "bullets": ["when you started", "what methods you use", "what is difficult for you", "and explain what has helped most"],
+      "follow_ups": ["Is learning a language easier with technology?"]
+    },
+    {
+      "id": "p2_ideal_home",
+      "topic": "Housing",
+      "topic_zh": "理想住所",
+      "tags": ["place", "daily"],
+      "title": "Describe your ideal home.",
+      "bullets": ["where it would be", "what it would look like", "who would live with you", "and explain why it is ideal for you"],
+      "follow_ups": ["Do people in your country prefer houses or flats?"]
+    },
+    {
+      "id": "p2_mistake_learned",
+      "topic": "Experience",
+      "topic_zh": "一次教训",
+      "tags": ["story", "experience"],
+      "title": "Describe a mistake you made and learned from.",
+      "bullets": ["what happened", "who was involved", "what the result was", "and explain what you learned"],
+      "follow_ups": ["Should children be allowed to make mistakes?"]
+    },
+    {
+      "id": "p2_online_shopping",
+      "topic": "Consumer",
+      "topic_zh": "网购体验",
+      "tags": ["consumer", "technology"],
+      "title": "Describe a time you bought something online.",
+      "bullets": ["what you bought", "why you bought it online", "how the experience went", "and explain whether you would buy online again"],
+      "follow_ups": ["What are the risks of online shopping?"]
+    },
+    {
+      "id": "p2_outdoor_activity",
+      "topic": "Health",
+      "topic_zh": "户外活动",
+      "tags": ["health", "hobby"],
+      "title": "Describe an outdoor activity you enjoy.",
+      "bullets": ["what it is", "where you do it", "who you do it with", "and explain why you enjoy it"],
+      "follow_ups": ["Do people in your country spend enough time outdoors?"]
+    },
+    {
+      "id": "p2_special_gift",
+      "topic": "Objects",
+      "topic_zh": "特别的礼物",
+      "tags": ["people", "memory"],
+      "title": "Describe a gift you gave to someone.",
+      "bullets": ["what the gift was", "who you gave it to", "why you chose it", "and explain how the person reacted"],
+      "follow_ups": ["Is it better to give money than a gift?"]
+    },
+    {
+      "id": "p2_weather_memory",
+      "topic": "Nature",
+      "topic_zh": "天气记忆",
+      "tags": ["nature", "story"],
+      "title": "Describe a time when the weather changed your plans.",
+      "bullets": ["what you planned to do", "what the weather was like", "what you did instead", "and explain how you felt"],
+      "follow_ups": ["Is weather forecasting reliable in your country?"]
+    },
+    {
+      "id": "p2_important_decision",
+      "topic": "Experience",
+      "topic_zh": "重要决定",
+      "tags": ["story", "personal"],
+      "title": "Describe an important decision you had to make.",
+      "bullets": ["what the decision was", "what the options were", "who helped you decide", "and explain how you feel about it now"],
+      "follow_ups": ["Do young people make decisions too quickly?"]
+    }
+  ],
+  "part3": [
+    {
+      "id": "p3_technology_society",
+      "topic": "Technology",
+      "topic_zh": "科技与社会",
+      "tags": ["technology", "society"],
+      "questions": [
+        "How has technology changed the way people communicate?",
+        "Do you think technology makes people more isolated or more connected?",
+        "Should schools limit students' use of phones?",
+        "Will artificial intelligence replace many jobs in the future?"
+      ]
+    },
+    {
+      "id": "p3_education",
+      "topic": "Education",
+      "topic_zh": "教育",
+      "tags": ["education", "society"],
+      "questions": [
+        "What is the most important thing schools should teach?",
+        "Should university education be free?",
+        "Is it better to study abroad or in your own country?",
+        "How has online learning changed education?"
+      ]
+    },
+    {
+      "id": "p3_environment",
+      "topic": "Environment",
+      "topic_zh": "环境",
+      "tags": ["environment", "society"],
+      "questions": [
+        "What environmental problems are most serious in your country?",
+        "Who should take more responsibility: individuals or governments?",
+        "Do you think people will use less plastic in the future?",
+        "How can cities become greener?"
+      ]
+    },
+    {
+      "id": "p3_work_life",
+      "topic": "Work",
+      "topic_zh": "工作与生活",
+      "tags": ["work", "society"],
+      "questions": [
+        "Is work-life balance possible for most people today?",
+        "Should companies allow employees to work from home?",
+        "Why do some people change jobs frequently?",
+        "Is salary the most important thing in a job?"
+      ]
+    },
+    {
+      "id": "p3_cities",
+      "topic": "Cities",
+      "topic_zh": "城市",
+      "tags": ["city", "society"],
+      "questions": [
+        "What are the main problems facing large cities today?",
+        "Do you think people will move back to smaller towns?",
+        "How can public transport be improved?",
+        "Should old buildings be preserved in city centres?"
+      ]
+    },
+    {
+      "id": "p3_family_roles",
+      "topic": "Family",
+      "topic_zh": "家庭角色",
+      "tags": ["family", "society"],
+      "questions": [
+        "How have family roles changed in the last fifty years?",
+        "Should grandparents help raise children?",
+        "Do people spend enough time with their families today?",
+        "Is it common for several generations to live together in your country?"
+      ]
+    },
+    {
+      "id": "p3_media",
+      "topic": "Media",
+      "topic_zh": "媒体",
+      "tags": ["media", "society"],
+      "questions": [
+        "How do people get their news nowadays?",
+        "Can you trust information on social media?",
+        "Is traditional media still important?",
+        "Should governments regulate online content?"
+      ]
+    },
+    {
+      "id": "p3_tourism",
+      "topic": "Tourism",
+      "topic_zh": "旅游",
+      "tags": ["travel", "society"],
+      "questions": [
+        "What are the positive and negative effects of tourism?",
+        "Should popular tourist sites limit visitor numbers?",
+        "Is it better to travel independently or on a tour?",
+        "How can tourism benefit local communities?"
+      ]
+    },
+    {
+      "id": "p3_health",
+      "topic": "Health",
+      "topic_zh": "健康",
+      "tags": ["health", "society"],
+      "questions": [
+        "Why are lifestyle diseases increasing?",
+        "Should governments tax unhealthy food?",
+        "Is mental health taken seriously enough today?",
+        "How can people be encouraged to exercise more?"
+      ]
+    },
+    {
+      "id": "p3_consumerism",
+      "topic": "Consumerism",
+      "topic_zh": "消费",
+      "tags": ["consumer", "society"],
+      "questions": [
+        "Why do people buy things they do not need?",
+        "Is advertising to children acceptable?",
+        "Do you think people are more materialistic than before?",
+        "How can we reduce waste from packaging?"
+      ]
+    },
+    {
+      "id": "p3_culture",
+      "topic": "Culture",
+      "topic_zh": "文化",
+      "tags": ["culture", "society"],
+      "questions": [
+        "Why is it important to preserve traditional culture?",
+        "Is globalisation making cultures more similar?",
+        "Should governments fund the arts?",
+        "How can young people learn about their own culture?"
+      ]
+    },
+    {
+      "id": "p3_aging",
+      "topic": "Ageing",
+      "topic_zh": "老龄社会",
+      "tags": ["ageing", "society"],
+      "questions": [
+        "What challenges does an ageing population create?",
+        "Should people retire later than they do now?",
+        "How can older people stay active in society?",
+        "Are young people and old people very different today?"
+      ]
+    }
+  ]
+}
