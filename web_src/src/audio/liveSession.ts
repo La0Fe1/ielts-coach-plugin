@@ -89,9 +89,12 @@ export class LiveUtterance {
           try { payload = JSON.parse(String(event.data)) as VadEvent } catch { return }
           if (payload.type === 'ready') {
             window.clearTimeout(timer)
-            if (this.callbacks.autoStop === false && socket.readyState === WebSocket.OPEN) {
-              // Keep a continuous Part 2 answer alive long enough to surface the 2.5 s stuck hint.
-              socket.send(JSON.stringify({ type: 'config', silence_sec: 3.0 }))
+            if (socket.readyState === WebSocket.OPEN) {
+              // Talk-then-stop mode: the daemon must not end the answer on silence,
+              // but keeps reporting hesitation so we can show the stuck hint.
+              socket.send(
+                JSON.stringify({ type: 'config', manual: this.callbacks.autoStop === false }),
+              )
             }
             if (!payload.available) this.enableFallback()
             finish()

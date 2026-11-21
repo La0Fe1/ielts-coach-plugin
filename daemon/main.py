@@ -951,8 +951,18 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                     elif kind == "config":
                         if command.get("silence_sec"):
                             detector.silence_sec = max(0.5, float(command["silence_sec"]))
+                        # V1.1: the learner ends the answer, not a timer. The detector
+                        # still reports "stuck" so the UI can offer hints.
+                        if "manual" in command:
+                            detector.cut_on_silence = not bool(command["manual"])
+                        if "cut_on_silence" in command:
+                            detector.cut_on_silence = bool(command["cut_on_silence"])
                         await websocket.send_json(
-                            {"type": "config", "silence_sec": detector.silence_sec}
+                            {
+                                "type": "config",
+                                "silence_sec": detector.silence_sec,
+                                "cut_on_silence": detector.cut_on_silence,
+                            }
                         )
                     continue
 

@@ -34,7 +34,7 @@ export function StartGate({
           <>
             <p className="gate-topic">{session.topic_title} · {session.part_mode.replace('part', 'Part ')}</p>
             <p className="gate-description">
-              点一次，同时授权麦克风与考官语音播放。之后考官问、你回答，停顿 2.6 秒就会自动接话。
+              点一次，同时授权麦克风与考官语音播放。考官问、你回答，说完点一下「我说完了」；中途卡住它会给你提示词。
             </p>
             <button className="primary-button gate-button" onClick={onStart} disabled={starting}>
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">

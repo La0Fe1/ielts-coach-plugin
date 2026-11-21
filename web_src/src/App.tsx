@@ -83,6 +83,15 @@ export default function App() {
   const [accent, setAccent] = useState<Accent>('uk')
   const [phase, setPhase] = useState<Phase>(previewMode ? 'idle' : 'gate')
   const [mode, setMode] = useState<MicMode>('auto')
+  // V1.1: the learner ends the answer. Silence still triggers the stuck hint, but
+  // never cuts the recording unless this is switched on.
+  const [cutOnSilence, setCutOnSilence] = useState(() => {
+    try {
+      return window.localStorage.getItem('ielts-cut-on-silence') === '1'
+    } catch {
+      return false
+    }
+  })
   const [muted, setMuted] = useState(false)
   const [level, setLevel] = useState(0)
   const [elapsed, setElapsed] = useState(0)
@@ -109,6 +118,10 @@ export default function App() {
   const sessionIdRef = useRef<number | null>(sessionId)
   const phaseRef = useRef<Phase>(previewMode ? 'idle' : 'gate')
   const modeRef = useRef<MicMode>('auto')
+  const cutOnSilenceRef = useRef(cutOnSilence)
+  useEffect(() => {
+    cutOnSilenceRef.current = cutOnSilence
+  }, [cutOnSilence])
   const mutedRef = useRef(false)
   const part2Ref = useRef<Part2State>(part2)
   const currentPartRef = useRef('part1')
@@ -292,7 +305,7 @@ export default function App() {
     listeningStartedAtRef.current = Date.now()
     let recordingFailed = false
     const utterance = new LiveUtterance(id, {
-      autoStop: !continuous,
+      autoStop: cutOnSilenceRef.current && !continuous,
       onLevel: setLevel,
       onVad: (event) => {
         if (sessionIdRef.current !== id) return
@@ -604,6 +617,18 @@ export default function App() {
       return next
     })
   }, [cancelActive, startListening])
+
+  const toggleCutOnSilence = useCallback(() => {
+    setCutOnSilence((value) => {
+      const next = !value
+      try {
+        window.localStorage.setItem('ielts-cut-on-silence', next ? '1' : '0')
+      } catch {
+        /* private mode */
+      }
+      return next
+    })
+  }, [])
 
   const changeMode = useCallback((next: MicMode) => {
     setMode(next)
@@ -922,6 +947,8 @@ export default function App() {
             elapsed={elapsed}
             onPrimary={stopOrStart}
             onToggleMode={changeMode}
+        cutOnSilence={cutOnSilence}
+        onToggleCut={toggleCutOnSilence}
             onToggleMute={toggleMute}
             onReplay={replayLast}
             onEndLesson={() => void endLesson()}

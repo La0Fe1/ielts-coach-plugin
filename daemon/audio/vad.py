@@ -124,6 +124,9 @@ class StreamingVAD:
     no_speech_timeout_sec: float = 20.0
     #: Silence (after speech started) that suggests the learner is stuck.
     stuck_sec: float = 2.5
+    #: Whether silence ends the utterance. V1.1 defaults to manual: the learner
+    #: presses "我说完了", while VAD keeps reporting hesitation (stuck) only.
+    cut_on_silence: bool = True
 
     # running state
     total_frames: int = 0
@@ -178,7 +181,11 @@ class StreamingVAD:
             self.trailing_silence = 0.0
 
         stop_reason: str | None = None
-        if self.speech_started and self.trailing_silence >= self.silence_sec:
+        if (
+            self.cut_on_silence
+            and self.speech_started
+            and self.trailing_silence >= self.silence_sec
+        ):
             stop_reason = "silence"
         elif self.elapsed_sec >= self.max_utterance_sec:
             stop_reason = "max_length"
