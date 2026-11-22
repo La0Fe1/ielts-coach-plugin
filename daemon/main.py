@@ -658,9 +658,22 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         state = ctx.registry.get(session_id)
         return state.snapshot()
 
+    def _enrich_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Attach playable URLs; the raw rows only carry file paths."""
+        for turn in turns:
+            if turn.get("learner_audio_path"):
+                turn["learner_audio_url"] = "/api/audio/user/" + Path(
+                    turn["learner_audio_path"]
+                ).name
+            if turn.get("examiner_tts_path"):
+                turn["examiner_audio_url"] = "/api/audio/tts/" + Path(
+                    turn["examiner_tts_path"]
+                ).name
+        return turns
+
     @app.get("/api/sessions/{session_id}/turns")
     async def get_turns(session_id: int) -> dict[str, Any]:
-        return {"turns": ctx.db.list_turns(session_id)}
+        return {"turns": _enrich_turns(ctx.db.list_turns(session_id))}
 
     @app.get("/api/sessions/{session_id}/aggregation")
     async def aggregation(session_id: int) -> dict[str, Any]:
@@ -675,16 +688,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         if not session:
             raise HTTPException(404, f"session {session_id} 不存在")
         state = ctx.registry.get(session_id)
-        turns = ctx.db.list_turns(session_id)
-        for turn in turns:
-            if turn.get("learner_audio_path"):
-                turn["learner_audio_url"] = "/api/audio/user/" + Path(
-                    turn["learner_audio_path"]
-                ).name
-            if turn.get("examiner_tts_path"):
-                turn["examiner_audio_url"] = "/api/audio/tts/" + Path(
-                    turn["examiner_tts_path"]
-                ).name
+        turns = _enrich_turns(ctx.db.list_turns(session_id))
         profile = ctx.db.get_profile()
         profile.update(ctx.llm_store.public_view())
         return {

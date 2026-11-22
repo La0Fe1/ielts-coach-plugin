@@ -191,8 +191,14 @@ function App() {
         if (contextResult.status === 'fulfilled') setContext(contextResult.value)
         const requested = initialSessionIdRef.current
         if (requested) {
-          await loadBootstrap(requested)
-          if (preview) setPhase('idle')
+          const data = await loadBootstrap(requested)
+          if (preview) {
+            setPhase('idle')
+            if (data.state.current_part === 'part2') {
+              setPart2({ stage: 'prep', deadline: Date.now() + 60_000 })
+              setPart2Remaining(60)
+            }
+          }
           return
         }
         const data = await api.sessions()

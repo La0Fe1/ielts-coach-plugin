@@ -72,7 +72,7 @@ export function CoachPanel({ turn, practice, onPractice, onSpeak, onSelectWord }
   </>
 
   return <aside className="coach-panel" aria-label="Coach 精批与提分工作台">
-    <header className="coach-heading"><div><p className="eyebrow">COACH WORKBENCH</p><h2>这一轮，如何再进一步</h2></div><span>第 {turn.turn_index + 1} 轮</span></header>
+    <header className="coach-heading"><div><p className="eyebrow">COACH WORKBENCH</p><h2>这一轮，如何再进一步</h2></div><span>第 {turn.turn_index} 轮</span></header>
     {!feedback && !turn.pronunciation_json ? <div className="coach-waiting">回答已收到，精批正在生成。你可以先回放自己的表达。</div> : <>
       {feedback?.quick_praise && <p className="quick-praise">{feedback.quick_praise}</p>}
       <section className="coach-section diff-section"><div className="section-title"><h3>语法精准修正</h3><span>红删 · 绿增</span></div><div className="diff-row"><span>原句</span><p>{diff.original.map((token, index) => <span className={token.kind === 'delete' ? 'diff-delete' : ''} key={index}>{token.value}</span>)}</p></div><div className="diff-row"><span>修正</span><p>{diff.corrected.map((token, index) => <span className={token.kind === 'insert' ? 'diff-insert' : ''} key={index}>{token.value}</span>)}</p></div></section>

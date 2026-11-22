@@ -98,6 +98,9 @@ export function SettingsDrawer({ open, profile, onClose, onSaved }: SettingsDraw
     if (micRef.current || micStatus !== 'idle') return
     setMessage(null)
     try {
+      const context = new AudioContext()
+      await context.resume()
+      await context.close()
       const recorder = await startRecording()
       micRef.current = recorder
       setMicStatus('recording')
