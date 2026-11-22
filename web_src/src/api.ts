@@ -70,6 +70,13 @@ export const api = {
     postJSON(`/api/sessions/${sessionId}/end`, { reason }),
   updateProfile: (body: Record<string, unknown>) => patchJSON<Profile>('/api/profile', body),
   testLlm: (body: LlmTestInput) => postJSON<LlmTestResult>('/api/llm/test', body),
+  modelsStatus: () => getJSON<{
+    bundled: boolean
+    models_dir: string
+    models: Record<string, { name: string; ready: boolean; language?: string }>
+    downloads: Record<string, { state: string; repo?: string; error?: string }>
+  }>('/api/models/status'),
+  downloadModel: (kind: string) => postJSON<{ ok: boolean }>('/api/models/download', { kind }),
   ttsWord: (text: string, accent: Accent) =>
     getJSON<{ url: string; duration_sec?: number }>(
       `/api/tts/word?text=${encodeURIComponent(text)}&accent=${accent}`,

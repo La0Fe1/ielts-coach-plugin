@@ -26,6 +26,8 @@ export interface LiveCallbacks {
   onFallback?: () => void
   /** Free mode cuts after the visible silence countdown; manual/Part 2 do not. */
   autoStop?: boolean
+  /** Fired once per pause when the sentence-completeness probe returns. */
+  onCompleteness?: (complete: boolean, detail?: string) => void
 }
 
 function encodeFrame(samples: Float32Array): ArrayBuffer {
@@ -63,6 +65,7 @@ export class LiveUtterance {
   private stopReason = 'manual'
   private resolver: ((result: UtteranceResult | null) => void) | null = null
   private guard: number | undefined
+  private probed = false
 
   constructor(sessionId: number, callbacks: LiveCallbacks = {}) {
     this.sessionId = sessionId
@@ -151,11 +154,40 @@ export class LiveUtterance {
     this.callbacks.onFallback?.()
   }
 
+  private maybeProbe(silenceSec: number) {
+    if (this.callbacks.autoStop === false || this.finished || this.probed) return
+    if (!this.speechSeen || silenceSec < 1.4) return
+    this.probed = true
+    const recorder = this.recorder
+    if (!recorder) return
+    const blob = recorder.snapshot()
+    if (!blob || blob.size < 2000) return
+    const form = new FormData()
+    form.append('file', blob, 'probe.wav')
+    const url = '/api/sessions/' + this.sessionId + '/probe?pause_sec=' + silenceSec.toFixed(2)
+    void fetch(url, { method: 'POST', body: form })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((result: { complete?: boolean; detail?: string } | null) => {
+        if (!result || this.finished) return
+        if (result.complete === false) {
+          // Unfinished sentence: give the learner room instead of cutting at 1.8 s.
+          this.silenceSec = 3.5
+          this.sendConfig()
+          this.callbacks.onCompleteness?.(false, result.detail)
+        } else {
+          this.callbacks.onCompleteness?.(true, result.detail)
+        }
+      })
+      .catch(() => undefined)
+  }
+
   private handleVad(event: VadEvent) {
     if (event.speech_started || event.speech) this.speechSeen = true
+    if (event.speech_started) this.probed = false
     if (event.speech_sec !== undefined) this.speechSec = event.speech_sec
     this.updateDynamicSilence()
     this.updateSendProgress(event.trailing_silence ?? 0)
+    this.maybeProbe(event.trailing_silence ?? 0)
     this.callbacks.onVad?.(event)
     if (event.should_stop && this.callbacks.autoStop !== false && !this.finished) {
       this.stopReason = event.stop_reason || 'silence'
@@ -184,6 +216,7 @@ export class LiveUtterance {
     if (!this.speechSeen) return
     const silenceMs = now - this.lastVoiceAt
     this.updateSendProgress(silenceMs / 1000)
+    this.maybeProbe(silenceMs / 1000)
     if (silenceMs >= FALLBACK_STUCK_MS && !this.localStuck) {
       this.localStuck = true
       this.callbacks.onVad?.({ type: 'vad', speech: false, trailing_silence: silenceMs / 1000, stuck: true })

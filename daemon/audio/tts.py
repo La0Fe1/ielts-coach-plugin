@@ -52,6 +52,21 @@ def _wav_duration(path: Path) -> float:
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s*")
 
 
+def edge_rate_for_speed(speed: float) -> str:
+    """Map a 0.8-1.2 playback speed to an Edge-TTS rate string.
+
+    Edge only understands percentages, and the UI exposes a multiplier; without
+    this the speed slider did nothing on the default engine.
+    """
+    try:
+        value = float(speed)
+    except (TypeError, ValueError):
+        value = 1.0
+    value = max(0.8, min(1.2, value))
+    percent = int(round((value - 1.0) * 100))
+    return f"{percent:+d}%"
+
+
 #: A run of English words inside a Chinese sentence ("think", "slow pace").
 EN_PHRASE_RE = re.compile(r"[A-Za-z][A-Za-z'\- ]*[A-Za-z]")
 
@@ -183,8 +198,9 @@ class TTSService:
     # -- cache ---------------------------------------------------------------
     def _cache_paths(self, text: str, accent: str, speed: float, engine: str) -> tuple[Path, Path]:
         voice = self.edge_voice(accent) if engine == "edge" else self.ko_voice(accent)
+        rate = edge_rate_for_speed(speed) if engine == "edge" else self.settings.tts_edge_rate
         digest = hashlib.sha256(
-            f"{engine}|{voice}|{self.settings.tts_edge_rate}|{speed:.2f}|{text}".encode("utf-8")
+            f"{engine}|{voice}|{rate}|{speed:.2f}|{text}".encode("utf-8")
         ).hexdigest()[:24]
         return (
             self.settings.paths.tts_cache_dir / f"{digest}.wav",
@@ -279,7 +295,7 @@ class TTSService:
             "voice": self.voice_for(accent) if engine == "edge" else self.ko_voice(accent),
             "accent": accent,
             "speed": speed,
-            "rate": self.settings.tts_edge_rate,
+            "rate": edge_rate_for_speed(speed) if engine == "edge" else self.settings.tts_edge_rate,
             "duration_sec": duration,
             "render_seconds": round(time.time() - started, 2),
             "kind": kind,
@@ -321,7 +337,10 @@ class TTSService:
         """
         segments = split_bilingual(text) or [("en", text)]
         if len(segments) == 1 and segments[0][0] == "en":
-            return self._synth_edge_segment(segments[0][1], self.edge_voice(accent))
+            return self._synth_edge_segment(
+                segments[0][1], self.edge_voice(accent), rate=edge_rate_for_speed(speed)
+            )
+        rate = edge_rate_for_speed(speed)
         jobs = []
         for lang, chunk in segments:
             voice = (
@@ -330,7 +349,7 @@ class TTSService:
                 else self.edge_voice(accent)
             )
             jobs.append((chunk, voice))
-        pieces = self._synth_edge_many(jobs)
+        pieces = self._synth_edge_many(jobs, rate=rate)
         if not pieces:
             return _stub_audio(text, speed)
         gap = np.zeros(int(SAMPLE_RATE * SEGMENT_GAP_SEC), dtype=np.float32)
@@ -358,17 +377,21 @@ class TTSService:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(lambda: asyncio.run(factory())).result()
 
-    def _synth_edge_many(self, jobs: list[tuple[str, str]]) -> list[np.ndarray]:
+    def _synth_edge_many(
+        self, jobs: list[tuple[str, str]], rate: str | None = None
+    ) -> list[np.ndarray]:
         import tempfile
 
         import edge_tts
         import soundfile as sf
 
+        rate_str = rate or self.settings.tts_edge_rate
+
         async def one(text: str, voice: str, path: str) -> None:
             communicate = edge_tts.Communicate(
                 text,
                 voice,
-                rate=self.settings.tts_edge_rate,
+                rate=rate_str,
                 pitch=self.settings.tts_edge_pitch,
             )
             await communicate.save(path)
@@ -390,8 +413,8 @@ class TTSService:
                 results.append(np.asarray(mono, dtype=np.float32))
         return results
 
-    def _synth_edge_segment(self, text: str, voice: str) -> np.ndarray:
-        return self._synth_edge_many([(text, voice)])[0]
+    def _synth_edge_segment(self, text: str, voice: str, rate: str | None = None) -> np.ndarray:
+        return self._synth_edge_many([(text, voice)], rate=rate)[0]
 
     def _render_kokoro(self, text: str, accent: str, speed: float) -> np.ndarray:
         pipeline = self._pipeline(accent)

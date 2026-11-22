@@ -121,7 +121,8 @@ class StreamingVAD:
     silence_sec: float = 1.8
     min_speech_sec: float = 0.25
     max_utterance_sec: float = 150.0
-    no_speech_timeout_sec: float = 20.0
+    #: Long enough that a thinking learner is not interrupted mid-plan.
+    no_speech_timeout_sec: float = 45.0
     #: Silence (after speech started) that suggests the learner is stuck.
     stuck_sec: float = 2.5
     #: Whether silence ends the utterance. V1.1 defaults to manual: the learner

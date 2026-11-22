@@ -5,9 +5,10 @@ interface MemoryDrawerProps {
   open: boolean
   context: LearnerContext | null
   onClose: () => void
+  onDrill?: () => void
 }
 
-export function MemoryDrawer({ open, context, onClose }: MemoryDrawerProps) {
+export function MemoryDrawer({ open, context, onClose, onDrill }: MemoryDrawerProps) {
   useEffect(() => {
     if (!open) return
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
@@ -24,6 +25,12 @@ export function MemoryDrawer({ open, context, onClose }: MemoryDrawerProps) {
           <div><p className="eyebrow">LEARNER MEMORY</p><h2>老师记得的事</h2></div>
           <button className="close-button" onClick={onClose} aria-label="关闭长期记忆">×</button>
         </header>
+
+        {onDrill && (
+          <div className="drawer-section">
+            <button className="primary-button" onClick={onDrill}>针对薄弱点开一节专项课</button>
+          </div>
+        )}
 
         {!context ? <p className="muted">还没有读取到学习者记忆。</p> : (
           <>

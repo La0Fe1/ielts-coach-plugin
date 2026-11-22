@@ -25,7 +25,7 @@ from typing import Any
 
 APP_NAME = "ielts-coach"
 #: Keep in sync with pyproject.toml - tests/test_version.py enforces it.
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 
 #: Sample rate mandated by the whole pipeline (browser recorder -> WAV -> models).
 TARGET_SAMPLE_RATE = 16_000

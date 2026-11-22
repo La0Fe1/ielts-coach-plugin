@@ -37,3 +37,13 @@ def test_english_sentence_with_chinese_quote():
     assert runs[0][0] == "en"
     assert "Try again" in runs[0][1]
     assert any(lang == "zh" for lang, _ in runs)
+
+def test_voice_speed_maps_to_edge_rate():
+    from daemon.audio.tts import edge_rate_for_speed
+
+    assert edge_rate_for_speed(1.0) == "+0%"
+    assert edge_rate_for_speed(0.85) == "-15%"
+    assert edge_rate_for_speed(1.15) == "+15%"
+    # Clamped to the documented slider range.
+    assert edge_rate_for_speed(0.5) == "-20%"
+    assert edge_rate_for_speed(2.0) == "+20%"

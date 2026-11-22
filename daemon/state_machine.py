@@ -262,6 +262,15 @@ class LessonRegistry:
     def push_report(self, session_id: int, report: dict[str, Any]) -> None:
         self.publish(session_id, {"type": "report", "report": report, "ts": time.time()})
 
+    def push_error(self, session_id: int, message: str, stage: str = "") -> None:
+        """Surface a driver failure to the UI instead of leaving it waiting forever."""
+        state = self.get(session_id)
+        state.last_error = message
+        self.publish(
+            session_id,
+            {"type": "error", "message": message, "stage": stage, "ts": time.time()},
+        )
+
     # -- the long poll -------------------------------------------------------
     async def wait_for_reply(self, session_id: int, timeout_sec: float) -> dict[str, Any]:
         """Wait (bounded) for the learner's next turn.

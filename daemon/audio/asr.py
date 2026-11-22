@@ -384,10 +384,13 @@ class _StubWhisper:
             duration = round(len(path) / config.TARGET_SAMPLE_RATE, 2)
         else:
             duration = _wav_duration(str(path))
-        script = (
+        # Test hooks: let a test pretend the learner said something else (a stop
+        # command, a Chinese question) without changing the stub itself.
+        script = os.environ.get("IELTS_COACH_STUB_TRANSCRIPT") or (
             "I live in Shanghai and I have been living here for about ten years. "
             "I really enjoy the city because there are so many parks and coffee shops."
         )
+        stub_language = os.environ.get("IELTS_COACH_STUB_LANGUAGE") or "en"
         tokens = script.split()
         step = duration / max(len(tokens), 1)
         words = []
@@ -407,7 +410,7 @@ class _StubWhisper:
             if index == 6:  # injected hesitation so pause logic is exercised
                 cursor += 1.1
         segment = _Segment(text=script, words=words)
-        info = _SegmentInfo(language="en", duration=duration)
+        info = _SegmentInfo(language=stub_language, duration=duration)
         return [segment], info
 
 

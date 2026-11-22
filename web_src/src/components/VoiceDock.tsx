@@ -18,6 +18,7 @@ interface VoiceDockProps {
   onReplay: () => void
   onEndLesson: () => void
   onShowReport: () => void
+  onRetry?: () => void
 }
 
 function formatElapsed(seconds: number): string {
@@ -25,7 +26,7 @@ function formatElapsed(seconds: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
 }
 
-export function VoiceDock({ phase, part2Stage, mode, muted, level, elapsed, sendProgress, hintWords, onHint, onPrimary, onChangeMode, onToggleMute, onReplay, onEndLesson, onShowReport }: VoiceDockProps) {
+export function VoiceDock({ phase, part2Stage, mode, muted, level, elapsed, sendProgress, hintWords, onHint, onPrimary, onChangeMode, onToggleMute, onReplay, onEndLesson, onShowReport, onRetry }: VoiceDockProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmEnd, setConfirmEnd] = useState(false)
   const listening = phase === 'listening'
@@ -58,7 +59,8 @@ export function VoiceDock({ phase, part2Stage, mode, muted, level, elapsed, send
 
   return <div className="voice-dock-area">
     {hintWords.length > 0 && listening && <div className="stuck-rescue" aria-live="polite"><span>好像卡住了，可以试试</span><div>{hintWords.map((word) => <button key={word} onClick={() => onHint(word)}>{word}</button>)}</div></div>}
-    {sendProgress.active && listening && <div className="send-countdown" role="status"><div><span>即将发送，继续说即取消</span><b>{sendProgress.remainingSec.toFixed(1)}s</b></div><i><em style={{ width: `${Math.round(sendProgress.progress * 100)}%` }} /></i></div>}
+    {listening && onRetry && <div className="dock-retry"><button className="dock-icon" aria-label="重说这一句" onClick={onRetry}>重说</button><span>说错了就重来，不用硬交废录音</span></div>}
+      {sendProgress.active && listening && <div className="send-countdown" role="status"><div><span>即将发送，继续说即取消</span><b>{sendProgress.remainingSec.toFixed(1)}s</b></div><i><em style={{ width: `${Math.round(sendProgress.progress * 100)}%` }} /></i></div>}
     <div className="voice-dock">
       <div className="mode-switch" role="group" aria-label="收音模式"><button className={mode === 'free' ? 'selected' : ''} onClick={() => onChangeMode('free')}>自由连麦</button><button className={mode === 'manual' ? 'selected' : ''} onClick={() => onChangeMode('manual')}>手动控场</button></div>
       <div className="dock-main-row">

@@ -151,11 +151,17 @@ class DaemonContext:
         dest = self.paths.user_audio_dir / f"s{session_id}-t{turn_index}-{stamp}.wav"
         return processor.process_upload(data, dest)
 
-    def resolve_tts(self, text: str, accent: str) -> dict[str, Any]:
+    def resolve_tts(self, text: str, accent: str, speed: float | None = None) -> dict[str, Any]:
         if not self.settings.tts_enabled:
             return {"url": None, "duration_sec": None, "voice": None, "accent": accent, "cached": False}
+        if speed is None:
+            # The settings drawer's speed slider must affect the examiner's voice.
+            try:
+                speed = float(self.llm_store.load().get("voice_speed", 1.0))
+            except (TypeError, ValueError):
+                speed = 1.0
         try:
-            return self.tts.synth(text, accent=accent)
+            return self.tts.synth(text, accent=accent, speed=speed)
         except Exception as exc:  # noqa: BLE001 - never block the turn on TTS
             logger.warning("TTS 合成失败（本轮降级为纯文本）: %s", exc)
             return {
@@ -464,8 +470,13 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             await _push_examiner(
                 session_id, result["examiner_text"], session.get("part_mode", "part1"), accent
             )
-        except Exception:  # noqa: BLE001 - never leave the learner in a dead room
+        except Exception as exc:  # noqa: BLE001 - never leave the learner in a dead room
             logger.exception("standalone 开场失败 session=%s", session_id)
+            ctx.registry.push_error(
+                session_id,
+                "开场题生成失败：" + str(exc)[:160] + "。检查设置里的模型与 Key。",
+                "open",
+            )
 
     async def _standalone_after(session_id: int, reply: dict[str, Any]) -> None:
         """Feedback card + next question, driven by the configured model."""
@@ -473,8 +484,28 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             session = ctx.db.get_session(session_id)
             plan = ctx.db.get_lesson_plan(session_id)
             profile = ctx.db.get_profile()
+            accent = profile.get("accent_preference", "uk")
+            part = session.get("part_mode", "part1")
+
+            # A spoken stop command ends the lesson immediately.
+            if reply.get("intent") == "end_lesson":
+                ctx.registry.end_lesson(session_id, reason="voice_stop_command")
+                await _standalone_report(session_id)
+                return
+
             turns = ctx.db.list_turns(session_id)
-            answered = len([t for t in turns if (t.get("learner_transcript") or "").strip()])
+            answered_turns = [
+                turn for turn in turns if (turn.get("learner_transcript") or "").strip()
+            ]
+            history = [
+                {"q": turn.get("examiner_question") or "", "a": turn.get("learner_transcript") or ""}
+                for turn in answered_turns[-6:]
+            ]
+            language = str(reply.get("language") or "en")
+            # A Chinese question must not burn a planned question.
+            question_index = len(answered_turns) if language.lower() in {"en", ""} else max(
+                0, len(answered_turns) - 1
+            )
             pronunciation = reply.get("pronunciation") or {}
             flagged = [
                 word.get("word")
@@ -492,19 +523,26 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 reply.get("wpm"),
                 brief,
                 hints,
-                answered,
-                profile.get("feedback_style", "instant_card_plus_voice"),
+                question_index,
+                str(session.get("feedback_style") or profile.get("feedback_style") or "instant_card_plus_voice"),
+                history=history,
+                language=language,
             )
             await _push_examiner(
                 session_id,
                 result["examiner_text"],
-                session.get("part_mode", "part1"),
-                profile.get("accent_preference", "uk"),
+                part,
+                accent,
                 result.get("feedback_payload"),
                 reply.get("turn_id"),
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.exception("standalone 下一轮失败 session=%s", session_id)
+            ctx.registry.push_error(
+                session_id,
+                "这一轮生成失败：" + str(exc)[:160] + "。可以重说，或检查设置。",
+                "turn",
+            )
 
     async def _standalone_report(session_id: int) -> None:
         """Score the lesson and persist the report without the agent."""
@@ -521,8 +559,29 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 result.get("bands_json") or {},
                 result.get("next_lesson_plan") or "",
             )
-        except Exception:  # noqa: BLE001
+            # Durable memory: the next lesson's review block is built from this.
+            for item in result.get("memory_updates") or []:
+                try:
+                    title = str(item.get("title") or "")[:120] or "课堂记录"
+                    key = str(item.get("memory_key") or "").strip()[:80]
+                    if not key:
+                        key = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:60] or "note"
+                    ctx.db.upsert_memory_note(
+                        memory_type=str(item.get("memory_type") or "weakness_grammar"),
+                        memory_key=key,
+                        title=title,
+                        content=str(item.get("content") or "")[:600],
+                        mastery_delta=float(item.get("mastery_delta") or 0.0),
+                    )
+                except Exception:  # noqa: BLE001 - memory is best-effort
+                    logger.debug("写入记忆失败: %s", item, exc_info=True)
+        except Exception as exc:  # noqa: BLE001
             logger.exception("standalone 报告失败 session=%s", session_id)
+            ctx.registry.push_error(
+                session_id,
+                "报告生成失败：" + str(exc)[:160] + "。可以重试结束课程。",
+                "report",
+            )
 
     def _persist_report(
         session: dict[str, Any],
@@ -1236,7 +1295,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
         try:
-            return await loop.run_in_executor(None, ctx.tts.synth_word, text, accent)
+            return await loop.run_in_executor(None, lambda: ctx.resolve_tts(text, accent))
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(500, f"示范音合成失败: {exc}") from exc
 
@@ -1247,7 +1306,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
         try:
-            return await loop.run_in_executor(None, ctx.tts.synth, text, accent)
+            return await loop.run_in_executor(None, lambda: ctx.resolve_tts(text, accent))
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(500, f"语音合成失败: {exc}") from exc
 

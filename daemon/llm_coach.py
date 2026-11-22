@@ -258,29 +258,92 @@ class StandaloneExaminer:
                 questions.append(str(text))
         return questions
 
+    # -- normalisation -------------------------------------------------------
+    CATEGORY_ALIASES = {
+        "type": "error_category",
+        "wrong": "original_excerpt",
+        "right": "corrected_excerpt",
+        "note": "explanation",
+        "category": "error_category",
+        "correction": "corrected_excerpt",
+        "original": "original_excerpt",
+    }
+
+    VALID_CATEGORIES = {
+        "tense", "subject_verb_agreement", "article", "preposition", "collocation",
+        "word_order", "chinglish", "plural_singular", "other",
+    }
+
+    @classmethod
+    def normalize_feedback(cls, feedback: dict[str, Any] | None) -> dict[str, Any]:
+        """Map whatever the model returned onto the DB/frontend field names.
+
+        The examiner prompt used to ask for type/wrong/right/note while the DB and
+        the UI read error_category/original_excerpt/corrected_excerpt/explanation,
+        so every standalone mistake was stored as "other" with empty strings.
+        """
+        data = dict(feedback or {})
+        for legacy, standard in cls.CATEGORY_ALIASES.items():
+            if legacy in data and standard not in data:
+                data[standard] = data.pop(legacy)
+
+        mistakes: list[dict[str, Any]] = []
+        for item in data.get("grammar_mistakes") or []:
+            if not isinstance(item, dict):
+                continue
+            mapped = dict(item)
+            for legacy, standard in cls.CATEGORY_ALIASES.items():
+                if legacy in mapped and standard not in mapped:
+                    mapped[standard] = mapped.pop(legacy)
+            category = str(mapped.get("error_category") or "other").strip().lower().replace("-", "_")
+            if category not in cls.VALID_CATEGORIES:
+                category = "other"
+            pattern = str(mapped.get("error_pattern") or "").strip()
+            if not pattern:
+                base = mapped.get("corrected_excerpt") or mapped.get("original_excerpt") or category
+                pattern = re.sub(r"[^a-z0-9]+", "_", str(base).lower()).strip("_")[:48] or category
+            mistakes.append(
+                {
+                    "error_category": category,
+                    "error_pattern": pattern,
+                    "original_excerpt": str(mapped.get("original_excerpt") or "").strip(),
+                    "corrected_excerpt": str(mapped.get("corrected_excerpt") or "").strip(),
+                    "upgraded_excerpt": str(mapped.get("upgraded_excerpt") or "").strip(),
+                    "explanation": str(mapped.get("explanation") or "").strip(),
+                }
+            )
+        data["grammar_mistakes"] = mistakes
+        return data
+
+    # -- prompts -------------------------------------------------------------
     async def first_turn(
         self, plan: dict[str, Any] | None, profile: dict[str, Any]
     ) -> dict[str, Any]:
+        """Opening question. Deliberately tiny: no SKILL.md, so it lands in <1 s."""
         questions = self._plan_questions(plan)
         first = questions[0] if questions else "Let's talk about your hometown."
+        review = (plan or {}).get("review") or {}
+        if (plan or {}).get("is_first_lesson") and not review.get("grammar_patterns") and not review.get("weak_phonemes"):
+            # Nothing to revisit: no model round-trip at all, speak immediately.
+            return {"examiner_text": "Good morning. Let's begin. " + first, "fast": True}
         user = (
-            "Lesson part: " + str((plan or {}).get("part_mode", "part1")) + "\n"
-            + "Planned questions:\n- " + "\n- ".join(questions[:5]) + "\n\n"
-            + "This is the opening turn. Greet in one short sentence (optional), then ask "
-            + "question 1 exactly as planned.\n\n"
-            + 'Return JSON: {"examiner_text": "..."}'
+            "Opening line for an IELTS speaking lesson.\n"
+            + "Part: " + str((plan or {}).get("part_mode", "part1")) + "\n"
+            + "First question: " + first + "\n"
+            + 'Reply with JSON: {"examiner_text": "..."} - at most two English sentences.'
         )
-        system = self._system(
-            "You are the examiner. Output one JSON object with key examiner_text. "
-            "examiner_text is English, at most two sentences."
+        system = (
+            "You are a warm IELTS examiner. Reply with one JSON object, key examiner_text. "
+            "English only. Do not repeat these instructions."
         )
         try:
-            data = await self.chat_json(system, user)
+            data = await self.chat_json(system, user, timeout=20.0)
             text = str(data.get("examiner_text") or "").strip()
         except Exception as exc:  # noqa: BLE001 - fall back to the bank question
-            logger.warning("standalone 首题生成失败，用题库原题: %s", exc)
-            text = first
-        return {"examiner_text": text or first}
+            logger.warning("standalone 首题生成失败，用模板开场: %s", exc)
+            text = "Good morning. Let's begin. " + first
+        return {"examiner_text": text or ("Good morning. Let's begin. " + first)}
+
     async def next_turn(
         self,
         plan: dict[str, Any] | None,
@@ -290,34 +353,63 @@ class StandaloneExaminer:
         stuck_hints: list[str] | None,
         question_index: int,
         feedback_style: str,
+        history: list[dict[str, str]] | None = None,
+        language: str = "en",
     ) -> dict[str, Any]:
         questions = self._plan_questions(plan)
         next_question = questions[question_index] if question_index < len(questions) else ""
         brief = json.dumps(pronunciation_brief or {}, ensure_ascii=False)
+        past = "\n".join(
+            "Q: " + str(item.get("q", ""))[:140] + "\nA: " + str(item.get("a", ""))[:220]
+            for item in (history or [])[-6:]
+        ) or "(none)"
         schema = (
-            '{"examiner_text": "<acknowledgement + next question, English, <=2 sentences>", '
+            '{"examiner_text": "<=2 sentences, English>", '
             '"feedback_payload": {"quick_praise": "...", "corrected_text": "...", '
-            '"upgraded_text": "...", "grammar_mistakes": [{"type": "tense", "wrong": "...", '
-            '"right": "...", "note": "中文一句话"}], "pronunciation_tips": ["中文一句话"]}}'
+            '"upgraded_text": "...", "grammar_mistakes": [{"error_category": '
+            '"tense|subject_verb_agreement|article|preposition|collocation|word_order|'
+            'chinglish|plural_singular|other", "error_pattern": "snake_case_key", '
+            '"original_excerpt": "...", "corrected_excerpt": "...", '
+            '"upgraded_excerpt": "...", "explanation": "中文一句话"}], '
+            '"pronunciation_tips": ["中文一句话"]}}'
         )
+        chinese = language and language.lower() not in {"en", ""}
+        style_rule = (
+            "The learner chose card-only feedback: examiner_text must NOT contain grammar or "
+            "pronunciation corrections. Just react naturally and ask the next question."
+            if feedback_style == "instant_card_only"
+            else "You may add at most one short spoken hint in examiner_text."
+        )
+        if chinese:
+            task = (
+                "The learner spoke Chinese (question or command). Answer in Chinese, give an "
+                "English example, then invite them back to English on the SAME question. "
+                "Do not advance to the next question."
+            )
+            target_question = "Repeat the current question: " + (questions[max(0, question_index - 1)] if questions else "")
+        else:
+            task = "React to the answer briefly, then ask the next question."
+            target_question = "Next question: " + (next_question or "(wrap up this part)")
         user = (
-            "Learner answer: " + (transcript or "(no speech)") + "\n"
+            "Lesson part: " + str((plan or {}).get("part_mode", "part1")) + "\n"
+            + "Previous turns:\n" + past + "\n\n"
+            + "Learner answer: " + (transcript or "(no speech)") + "\n"
             + "Speech rate wpm: " + str(wpm or "-") + "\n"
             + "Pronunciation brief: " + brief + "\n"
             + "Hint words offered while stuck: " + json.dumps(stuck_hints or [], ensure_ascii=False) + "\n"
-            + "Next question to ask: " + (next_question or "(wrap up this part)") + "\n\n"
+            + target_question + "\n"
+            + "Task: " + task + "\n"
+            + style_rule + "\n\n"
             + "Return JSON with exactly these keys:\n" + schema
         )
-        system = self._system(
-            "You are the examiner. Reply with ONE JSON object only, keys examiner_text and "
-            "feedback_payload. Examiner text is English; notes inside feedback are Chinese. "
-            "Never score pronunciation yourself: use the pronunciation brief I give you."
+        system = (
+            "You are an IELTS examiner and coach. Reply with ONE JSON object only. "
+            "examiner_text is English unless the learner spoke Chinese. Notes inside "
+            "feedback are Chinese. Never score pronunciation yourself: use the brief."
         )
         data = await self.chat_json(system, user)
         examiner_text = str(data.get("examiner_text") or "").strip() or (next_question or "Let's stop here.")
-        feedback = data.get("feedback_payload")
-        if not isinstance(feedback, dict):
-            feedback = {}
+        feedback = self.normalize_feedback(data.get("feedback_payload"))
         return {"examiner_text": examiner_text, "feedback_payload": feedback}
 
     async def report(
@@ -338,7 +430,10 @@ class StandaloneExaminer:
             )
         schema = (
             '{"bands": {"overall": 6.5, "fc": 6.5, "lr": 6.0, "gra": 6.5, "pr": 6.0}, '
-            '"report_markdown": "...", "next_lesson_plan": "..."}'
+            '"report_markdown": "...", "next_lesson_plan": "...", '
+            '"memory_updates": [{"memory_type": "weakness_grammar|weakness_phoneme|'
+            'personal_fact|part2_story", "memory_key": "snake_case", "title": "...", '
+            '"content": "中文一句话", "mastery_delta": 0.0}]}'
         )
         user = (
             "Topic: " + str(session.get("topic_title")) + "\n"
@@ -350,7 +445,7 @@ class StandaloneExaminer:
         system = self._system(
             "Write the end-of-lesson report. Reply with one JSON object: bands (0-9, "
             "half bands), report_markdown (Chinese, short sections), next_lesson_plan "
-            "(Chinese, 2-3 bullet lines)."
+            "(Chinese, 2-3 bullets), memory_updates (2-4 durable items worth remembering)."
         )
         data = await self.chat_json(system, user, timeout=90.0)
         bands = data.get("bands") if isinstance(data.get("bands"), dict) else {}
@@ -360,8 +455,13 @@ class StandaloneExaminer:
                 clean[key] = max(0.0, min(9.0, round(float(bands.get(key, 6.0)) * 2) / 2))
             except (TypeError, ValueError):
                 clean[key] = 6.0
+        updates = [
+            item for item in (data.get("memory_updates") or [])
+            if isinstance(item, dict) and item.get("memory_type") and item.get("content")
+        ]
         return {
             "bands_json": clean,
             "report_markdown": str(data.get("report_markdown") or "").strip(),
             "next_lesson_plan": str(data.get("next_lesson_plan") or "").strip(),
+            "memory_updates": updates,
         }

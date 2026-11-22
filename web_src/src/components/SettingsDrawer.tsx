@@ -25,6 +25,8 @@ export function SettingsDrawer({ open, profile, onClose, onSaved }: SettingsDraw
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [micStatus, setMicStatus] = useState<'idle' | 'recording' | 'playing'>('idle')
+  const [models, setModels] = useState<Record<string, { name: string; ready: boolean }> | null>(null)
+  const [modelBusy, setModelBusy] = useState<string | null>(null)
   const micRef = useRef<ActiveRecording | null>(null)
   const micUrlRef = useRef<string | null>(null)
 
@@ -42,6 +44,15 @@ export function SettingsDrawer({ open, profile, onClose, onSaved }: SettingsDraw
     setTestResult(null)
     setMessage(null)
   }, [open, profile])
+
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    api.modelsStatus()
+      .then((data) => { if (alive) setModels(data.models) })
+      .catch(() => undefined)
+    return () => { alive = false }
+  }, [open])
 
   useEffect(() => () => {
     micRef.current?.cancel()
@@ -112,7 +123,32 @@ export function SettingsDrawer({ open, profile, onClose, onSaved }: SettingsDraw
     <header className="drawer-head"><div><p className="eyebrow">LOCAL SETTINGS</p><h2>模型与课程偏好</h2></div><button className="close-button" onClick={onClose} aria-label="关闭设置">×</button></header>
     <section className="drawer-section"><h3>考官驱动</h3><div className="choice-chips"><button className={mode === 'standalone' ? 'selected' : ''} onClick={() => setMode('standalone')}>界面直连接课</button><button className={mode === 'mcp' ? 'selected' : ''} onClick={() => setMode('mcp')}>外部代理接课</button></div><p className="muted">直连接课在创建后自动生成计划并播报第一题；外部代理接课等待 dsh / Cursor 驱动。</p></section>
     <section className="drawer-section"><h3>OpenAI 兼容模型</h3><div className="settings-form"><label>Provider<select value={provider} onChange={(event) => changeProvider(event.target.value)}><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="ollama">Ollama</option></select></label><label>Base URL<input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} spellCheck={false} /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} spellCheck={false} /></label><label>API Key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={profile?.has_api_key ? '已保存，留空则不修改' : provider === 'ollama' ? 'Ollama 可留空' : '输入本机保存的 Key'} autoComplete="off" /></label></div><button className="secondary-button settings-test" onClick={() => void testConnection()} disabled={testing}>{testing ? '正在测试…' : '测试模型连接'}</button>{testResult && <div className={`connection-result ${testResult.ok ? 'is-ok' : 'is-error'}`}><strong>{testResult.ok ? `连接成功${testResult.latency_ms !== undefined ? ` · ${testResult.latency_ms}ms` : ''}` : '连接未成功'}</strong><p>{testResult.message}</p></div>}</section>
-    <section className="drawer-section"><h3>学习目标</h3><div className="settings-form"><label>目标分<select value={target} onChange={(event) => setTarget(Number(event.target.value))}>{[6, 6.5, 7, 7.5, 8, 8.5].map((band) => <option value={band} key={band}>{band.toFixed(1)}</option>)}</select></label><label>示范口音<select value={accent} onChange={(event) => setAccent(event.target.value as Accent)}><option value="uk">英音</option><option value="us">美音</option></select></label><label>反馈风格<select value={feedback} onChange={(event) => setFeedback(event.target.value as FeedbackStyle)}><option value="instant_card_plus_voice">口头简评 + 卡片</option><option value="instant_card_only">纯考官沉浸</option></select></label><label>语速 {speed.toFixed(2)}×<input type="range" min="0.8" max="1.2" step="0.05" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} /></label></div></section>
+    <section className="drawer-section"><h3>本机模型</h3>
+        {!models ? <p className="muted">正在读取模型状态…</p> : (
+          <ul className="model-status-list">
+            {(['asr', 'tts', 'pronunciation'] as const).map((key) => {
+              const item = models[key]
+              if (!item) return null
+              return (
+                <li key={key}>
+                  <strong>{key === 'asr' ? '语音识别' : key === 'tts' ? '语音合成' : '发音评分'}</strong>
+                  <span className={item.ready ? 'is-ok' : 'is-pending'}>{item.ready ? '就绪' : '未加载'}</span>
+                  <em>{item.name}</em>
+                  {!item.ready && key === 'asr' && (
+                    <button className="text-button" disabled={modelBusy === key} onClick={async () => {
+                      setModelBusy(key)
+                      try { await api.downloadModel('asr') } catch { /* status refresh below */ }
+                      setModelBusy(null)
+                      api.modelsStatus().then((data) => setModels(data.models)).catch(() => undefined)
+                    }}>{modelBusy === key ? '下载中…' : '按需下载'}</button>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </section>
+      <section className="drawer-section"><h3>学习目标</h3><div className="settings-form"><label>目标分<select value={target} onChange={(event) => setTarget(Number(event.target.value))}>{[6, 6.5, 7, 7.5, 8, 8.5].map((band) => <option value={band} key={band}>{band.toFixed(1)}</option>)}</select></label><label>示范口音<select value={accent} onChange={(event) => setAccent(event.target.value as Accent)}><option value="uk">英音</option><option value="us">美音</option></select></label><label>反馈风格<select value={feedback} onChange={(event) => setFeedback(event.target.value as FeedbackStyle)}><option value="instant_card_plus_voice">口头简评 + 卡片</option><option value="instant_card_only">纯考官沉浸</option></select></label><label>语速 {speed.toFixed(2)}×<input type="range" min="0.8" max="1.2" step="0.05" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} /></label></div></section>
     <section className="drawer-section"><h3>设备检查</h3><p className="muted">录 2 秒并立即回放，使用与正式上课相同的 Web Audio / WAV 链路。</p><button className="secondary-button" onClick={() => void testMic()} disabled={micStatus !== 'idle'}>{micStatus === 'recording' ? '正在试麦 2 秒…' : micStatus === 'playing' ? '正在回放…' : '试麦并回放'}</button></section>
     {message && <p className="settings-message" role="status">{message}</p>}
     <button className="primary-button settings-save" onClick={() => void save()} disabled={saving}>{saving ? '正在保存…' : '保存设置'}</button>

@@ -123,6 +123,7 @@ function App() {
   const sessionIdRef = useRef<number | null>(sessionId)
   const phaseRef = useRef<Phase>(phase)
   const modeRef = useRef<MicMode>(mode)
+  const spaceDownRef = useRef(0)
   const mutedRef = useRef(muted)
   const currentPartRef = useRef('part1')
   const contextRef = useRef<LearnerContext | null>(null)
@@ -161,6 +162,21 @@ function App() {
     if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current)
     noticeTimerRef.current = window.setTimeout(() => setNotice(null), 4200)
   }, [])
+
+  /** Keep ?session= in the URL so the desktop shell does not reload the page. */
+  const syncSessionUrl = useCallback((id: number) => {
+    try {
+      const url = new URL(window.location.href)
+      url.searchParams.set('session', String(id))
+      url.searchParams.delete('embed')
+      window.history.replaceState(null, '', url.toString())
+    } catch {
+      /* file:// or restricted history - harmless */
+    }
+  }, [])
+
+  const practiceMinSec = (targetText: string) =>
+    targetText.trim().split(/\s+/).filter(Boolean).length === 1 ? 0.5 : 1.5
 
   const loadBootstrap = useCallback(async (id: number) => {
     const data = await api.bootstrap(id)
@@ -339,6 +355,9 @@ function App() {
         if (id) void api.recordingCancel(id).catch(() => undefined)
       },
       onFallback: () => showNotice('实时 VAD 暂不可用，已切换本地静音检测'),
+      onCompleteness: (complete, detail) => {
+        if (!complete) showNotice('好像还没说完，继续说…（已等你 3.5 秒）')
+      },
     })
     utteranceRef.current = utterance
     const result = await utterance.run()
@@ -426,6 +445,12 @@ function App() {
           void api.report(sessionId).then(setReport).catch(() => undefined)
         }
         if (event.type === 'report') void api.report(sessionId).then(setReport).catch(() => undefined)
+        if (event.type === 'error') {
+          setPendingTranscript(null)
+          setPhase((current) => current === 'thinking' || current === 'submitting' ? 'idle' : current)
+          setAppError({ kind: 'network', message: event.message || '模型调用失败，请检查设置里的 Key 或网络。' })
+          showNotice('模型出错，可重试或去设置检查 Key')
+        }
       }
       socket.onclose = () => {
         if (!closed && phaseRef.current !== 'ended') reconnectTimer = window.setTimeout(connect, 2000)
@@ -523,6 +548,7 @@ function App() {
       const id = result.session_id
       setSessionId(id)
       sessionIdRef.current = id
+      syncSessionUrl(id)
       setSession(result.session)
       setPlan(result.plan)
       setReport(null)
@@ -602,8 +628,9 @@ function App() {
     setPractice((current) => ({ ...current, status: 'uploading', error: null }))
     try {
       const recording = await recorder.stop()
-      if (recording.durationSec < 2) {
-        setPractice((current) => ({ ...current, status: 'idle', error: '跟读至少需要 2 秒，本次没有上传。' }))
+      const minimum = practiceMinSec(targetText)
+      if (recording.durationSec < minimum) {
+        setPractice((current) => ({ ...current, status: 'idle', error: '跟读至少需要 ' + minimum + ' 秒，本次没有上传。' }))
         return
       }
       const result = await api.practiceSentence(id, recording.blob, targetText, accent)
@@ -620,7 +647,8 @@ function App() {
     if (!targetText.trim()) return
     if (practiceRecorderRef.current) {
       if (practiceTargetRef.current === targetText) {
-        if (practiceElapsedRef.current < 2) showNotice('跟读至少 2 秒，再完成重测')
+        const minimum = practiceMinSec(targetText)
+        if (practiceElapsedRef.current < minimum) showNotice('跟读至少 ' + minimum + ' 秒，再完成重测')
         else await finishPractice()
       }
       return
@@ -708,6 +736,7 @@ function App() {
     setPart2({ stage: 'idle', deadline: null })
     setSessionId(id)
     sessionIdRef.current = id
+    syncSessionUrl(id)
     setPhase('gate')
     try { await loadBootstrap(id) } catch (error) { setGateError(String(error)); setGateErrorKind('network') }
   }, [cancelActive, cancelPractice, stopExaminerPlayback, loadBootstrap])
@@ -752,14 +781,33 @@ function App() {
       if (event.code !== 'Space' || historyOpen || memoryOpen || planOpen || settingsOpen || reportOpen || selectedWord || phaseRef.current === 'gate') return
       event.preventDefault()
       if (practiceRecorderRef.current) {
-        if (practiceElapsedRef.current >= 2) void finishPractice()
-        else showNotice('跟读至少 2 秒，再完成重测')
+        const minimum = practiceMinSec(practiceTargetRef.current ?? '')
+        if (practiceElapsedRef.current >= minimum) void finishPractice()
+        else showNotice('跟读至少 ' + minimum + ' 秒，再完成重测')
+        return
+      }
+      if (modeRef.current === 'manual' && phaseRef.current === 'listening') {
+        // Hold space to talk, release after 350 ms to send. A quick tap keeps the
+        // old toggle behaviour.
+        if (!spaceDownRef.current) spaceDownRef.current = Date.now()
         return
       }
       if (phaseRef.current === 'listening' || phaseRef.current === 'idle') stopOrStart()
     }
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' || !spaceDownRef.current) return
+      const held = Date.now() - spaceDownRef.current
+      spaceDownRef.current = 0
+      if (modeRef.current !== 'manual') return
+      event.preventDefault()
+      if (held >= 350) stopOrStart()
+    }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
   }, [historyOpen, memoryOpen, planOpen, settingsOpen, reportOpen, selectedWord, stopOrStart, finishPractice, showNotice])
 
   useEffect(() => () => {
@@ -805,17 +853,20 @@ function App() {
       <main className="dialogue-pane">
         <div className="dialogue-part2">{part2Card}</div>
         <ChatStream turns={turns} activeExaminer={activeExaminer} selectedTurnId={selectedTurnId} phase={phase} pendingTranscript={pendingTranscript} onSelectTurn={setSelectedTurnId} onSelectWord={(word, audio) => setSelectedWord({ word, audio })} onReplay={replayAudio} renderCoach={renderCoach} />
-        {appError && <section className="error-panel" role="alert"><strong>{appError.kind === 'microphone' ? '麦克风需要修复' : appError.kind === 'playback' ? '播放需要解锁' : appError.kind === 'audio' ? '音频格式或内容未被接受' : '本地连接需要检查'}</strong><p>{appError.message}</p><ol>{errorInstructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ol><div><button className="text-button" onClick={() => setAppError(null)}>知道了</button><button className="secondary-button" onClick={() => { setAppError(null); if (phase === 'idle') void startListening() }}>重试</button></div></section>}
+        {appError && <section className="error-panel" role="alert"><strong>{appError.kind === 'microphone' ? '麦克风需要修复' : appError.kind === 'playback' ? '播放需要解锁' : appError.kind === 'audio' ? '音频格式或内容未被接受' : '本地连接需要检查'}</strong><p>{appError.message}</p><ol>{errorInstructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ol><div><button className="text-button" onClick={() => setAppError(null)}>知道了</button><button className="text-button" onClick={() => { setAppError(null); setSettingsOpen(true) }}>去设置</button><button className="secondary-button" onClick={() => { setAppError(null); if (phase === 'idle') void startListening() }}>重试</button></div></section>}
         {phase === 'ended' && <section className="ended-card"><p className="eyebrow">LESSON COMPLETE</p><h1>这节课完成了</h1><p>{report ? '报告、趋势图与复练清单已生成。' : '报告生成后会自动更新，也可以先查看课堂记录。'}</p><div className="ended-actions"><button className="secondary-button" onClick={() => setReportOpen(true)}>查看报告</button><button className="primary-button" onClick={restartLesson}>开始下一课</button></div></section>}
       </main>
       <div className="coach-pane">{part2Card}{renderCoach(selectedTurn)}</div>
     </div>
 
-    <VoiceDock phase={phase} part2Stage={part2.stage} mode={mode} muted={muted} level={level} elapsed={elapsed} sendProgress={sendProgress} hintWords={liveStuck ? hintWords : []} onHint={(word) => void speakText(word)} onPrimary={stopOrStart} onChangeMode={changeMode} onToggleMute={toggleMute} onReplay={() => { if (activeExaminer.audioUrl) void playExaminer(activeExaminer.audioUrl).then(() => maybeAutoListen(activeExaminer.part)) }} onEndLesson={() => void endLesson()} onShowReport={() => setReportOpen(true)} />
+    <VoiceDock phase={phase} part2Stage={part2.stage} mode={mode} muted={muted} level={level} elapsed={elapsed} sendProgress={sendProgress} hintWords={liveStuck ? hintWords : []} onHint={(word) => void speakText(word)} onPrimary={stopOrStart} onChangeMode={changeMode} onToggleMute={toggleMute} onReplay={() => { if (activeExaminer.audioUrl) void playExaminer(activeExaminer.audioUrl).then(() => maybeAutoListen(activeExaminer.part)) }} onEndLesson={() => void endLesson()} onShowReport={() => setReportOpen(true)} onRetry={() => { cancelActive(); window.setTimeout(() => void startListening(), 120) }} />
     {notice && <div className="notice" role="status">{notice}</div>}
     <PhonemeDrawer word={selectedWord?.word ?? null} learnerAudioUrl={selectedWord?.audio} accent={accent} practice={practice} onPractice={(text, score) => void beginPractice(text, score)} onClose={() => setSelectedWord(null)} />
     <HistoryDrawer open={historyOpen} currentSessionId={sessionId ?? -1} onClose={() => setHistoryOpen(false)} onOpen={(id) => void openSession(id)} />
-    {context && <MemoryDrawer open={memoryOpen} context={context} onClose={() => setMemoryOpen(false)} />}
+    {context && <MemoryDrawer open={memoryOpen} context={context} onClose={() => setMemoryOpen(false)} onDrill={() => {
+          setMemoryOpen(false)
+          void createLesson({ part_mode: 'free_drill', topic_hint: '', target_band: profile?.target_band ?? 7.5, accent: profile?.accent_preference ?? accent, feedback_style: profile?.feedback_style ?? 'instant_card_plus_voice' })
+        }} />}
     <PlanDrawer open={planOpen} plan={plan} onClose={() => setPlanOpen(false)} />
     <SettingsDrawer open={settingsOpen} profile={profile} onClose={() => setSettingsOpen(false)} onSaved={(saved) => { setProfile(saved); setAccent(saved.accent_preference) }} />
     {reportOpen && <LessonReportView report={report} turns={turns} context={context} targetBand={profile?.target_band ?? session?.target_band ?? 7.5} onClose={() => setReportOpen(false)} onRestart={restartLesson} onDownload={downloadReport} onSpeak={(text) => void speakText(text)} onReplay={replayAudio} onSelectWord={(word, audio) => setSelectedWord({ word, audio })} />}

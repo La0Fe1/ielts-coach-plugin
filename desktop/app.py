@@ -256,9 +256,23 @@ def run(session_id: int | None, base: str, on_top: bool, width: int, height: int
                     window.load_url(build_url(base, wanted))
                     continue
                 wanted = active_session(base)
-                if wanted and wanted != current["session"]:
+                if not wanted or wanted == current["session"]:
+                    continue
+                # The UI updates ?session= itself when the learner opens a lesson,
+                # so only reload when the page really shows a different session.
+                # Reloading here would drop the microphone grant and AudioContext
+                # unlocked by the user's click.
+                try:
+                    on_page = window.evaluate_js(
+                        "new URLSearchParams(window.location.search).get('session')"
+                    )
+                except Exception:  # noqa: BLE001 - page not ready yet
+                    on_page = None
+                if on_page and str(on_page).strip() == str(wanted):
                     current["session"] = wanted
-                    window.load_url(build_url(base, wanted))
+                    continue
+                current["session"] = wanted
+                window.load_url(build_url(base, wanted))
             except Exception:  # noqa: BLE001 - keep the window alive
                 logger.debug("桌面窗口轮询失败", exc_info=True)
 
