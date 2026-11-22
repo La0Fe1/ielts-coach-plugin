@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { LiveUtterance, type UtteranceResult } from '../audio/liveSession'
 import { diagnoseMic, explainMicError, type MicDiagnosis } from '../audio/mic'
 import { PhonemeDrawer } from './PhonemeDrawer'
-import type { Accent, PronWord, PronunciationResult } from '../types'
+import type { Accent, PracticeState, PronWord, PronunciationResult } from '../types'
+
+const IDLE_PRACTICE: PracticeState = { targetText: null, status: 'idle', elapsed: 0, result: null, error: null }
 
 interface Props {
   accent: Accent
@@ -289,6 +291,8 @@ export function SelftestView({ accent, onBack }: Props) {
         word={selected}
         learnerAudioUrl={result?.audio_url ?? null}
         accent={accent}
+        practice={IDLE_PRACTICE}
+        onPractice={() => undefined}
         onClose={() => setSelected(null)}
       />
     </div>

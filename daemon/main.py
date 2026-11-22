@@ -685,11 +685,13 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 turn["examiner_audio_url"] = "/api/audio/tts/" + Path(
                     turn["examiner_tts_path"]
                 ).name
+        profile = ctx.db.get_profile()
+        profile.update(ctx.llm_store.public_view())
         return {
             "session": session,
             "state": state.snapshot(),
             "turns": turns,
-            "profile": ctx.db.get_profile(),
+            "profile": profile,
             "context": ctx.db.get_learner_context(),
             "report": ctx.db.get_lesson_report(session_id),
             "plan": ctx.db.get_lesson_plan(session_id),
