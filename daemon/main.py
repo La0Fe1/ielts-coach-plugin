@@ -49,7 +49,7 @@ from .completeness import analyze as analyze_completeness
 from .completeness import is_stop_command
 from .db import Database
 from .hints import HintBook, analyze_stuck, used_words
-from .llm_coach import LLMConfigStore, StandaloneExaminer
+from .llm_coach import ASR_MODELS, LLMConfigStore, StandaloneExaminer
 from .planner import LessonPlanner, QuestionBank
 from .state_machine import STATUS_ENDED, STATUS_WAITING, LessonRegistry
 
@@ -133,6 +133,11 @@ class DaemonContext:
             self.llm_store,
             Path(__file__).resolve().parents[1] / "skills" / "ielts-speaking-coach" / "SKILL.md",
         )
+        # A model chosen in settings overrides the bundled default. peek() avoids
+        # caching the config before the first request (tests rewrite it later).
+        chosen_asr = str(self.llm_store.peek().get("asr_model") or "").strip()
+        if chosen_asr:
+            self.settings.asr_model = chosen_asr
         self.started_at = time.time()
         self.warmup_state: dict[str, Any] = {
             "asr": "pending",
@@ -459,6 +464,17 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         )
         return turn
 
+    def _plan_items(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
+        return [item for item in (plan or {}).get("questions") or [] if isinstance(item, dict)]
+
+    def _question_part(plan: dict[str, Any] | None, index: int, fallback: str) -> str:
+        """Real part of the question at index (full_mock moves part1 -> part2 -> part3)."""
+        items = _plan_items(plan)
+        if 0 <= index < len(items):
+            part = str(items[index].get("part") or "").strip() or fallback
+            return "part1" if part == "review" else part
+        return fallback
+
     async def _standalone_open(session_id: int) -> None:
         """Generate and speak the opening question right after the session exists."""
         try:
@@ -467,9 +483,8 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             profile = ctx.db.get_profile()
             result = await ctx.llm.first_turn(plan, profile)
             accent = profile.get("accent_preference", "uk")
-            await _push_examiner(
-                session_id, result["examiner_text"], session.get("part_mode", "part1"), accent
-            )
+            part = _question_part(plan, 0, session.get("part_mode", "part1"))
+            await _push_examiner(session_id, result["examiner_text"], part, accent)
         except Exception as exc:  # noqa: BLE001 - never leave the learner in a dead room
             logger.exception("standalone 开场失败 session=%s", session_id)
             ctx.registry.push_error(
@@ -485,7 +500,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             plan = ctx.db.get_lesson_plan(session_id)
             profile = ctx.db.get_profile()
             accent = profile.get("accent_preference", "uk")
-            part = session.get("part_mode", "part1")
+            fallback_part = session.get("part_mode", "part1")
 
             # A spoken stop command ends the lesson immediately.
             if reply.get("intent") == "end_lesson":
@@ -517,25 +532,77 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 "flagged_words": [w for w in flagged if w],
             }
             hints = (reply.get("stuck") or {}).get("hint_words") or []
-            result = await ctx.llm.next_turn(
-                plan,
-                str(reply.get("transcript") or ""),
-                reply.get("wpm"),
-                brief,
-                hints,
-                question_index,
-                str(session.get("feedback_style") or profile.get("feedback_style") or "instant_card_plus_voice"),
-                history=history,
-                language=language,
+            items = _plan_items(plan)
+
+            # The plan is finished: say goodbye and let the UI offer the report.
+            if question_index >= len(items):
+                last_part = _question_part(plan, len(items) - 1, fallback_part)
+                await _push_examiner(
+                    session_id,
+                    "That's the end of our speaking session today. Let's review your performance.",
+                    last_part,
+                    accent,
+                )
+                ctx.registry.push_plan_completed(session_id)
+                return
+
+            part = _question_part(plan, question_index, fallback_part)
+            style = str(
+                session.get("feedback_style")
+                or profile.get("feedback_style")
+                or "instant_card_plus_voice"
             )
-            await _push_examiner(
-                session_id,
-                result["examiner_text"],
-                part,
-                accent,
-                result.get("feedback_payload"),
-                reply.get("turn_id"),
-            )
+            transcript_text = str(reply.get("transcript") or "")
+            pushed: dict[str, Any] = {"turn": None}
+
+            async def on_examiner_text(text: str) -> None:
+                # Speak the next question before the correction card finishes.
+                pushed["turn"] = await _push_examiner(session_id, text, part, accent)
+
+            try:
+                result = await ctx.llm.next_turn_stream(
+                    plan,
+                    transcript_text,
+                    reply.get("wpm"),
+                    brief,
+                    hints,
+                    question_index,
+                    style,
+                    history=history,
+                    language=language,
+                    on_examiner_text=on_examiner_text,
+                )
+            except Exception:  # noqa: BLE001 - providers without SSE fall back here
+                logger.info("流式回合失败，回退到一次性 JSON", exc_info=True)
+                result = await ctx.llm.next_turn(
+                    plan, transcript_text, reply.get("wpm"), brief, hints,
+                    question_index, style, history=history, language=language,
+                )
+                await _push_examiner(
+                    session_id,
+                    result["examiner_text"],
+                    part,
+                    accent,
+                    result.get("feedback_payload"),
+                    reply.get("turn_id"),
+                )
+                return
+
+            feedback_payload = result.get("feedback_payload") or {}
+            if pushed["turn"] is None:
+                await _push_examiner(
+                    session_id,
+                    result["examiner_text"],
+                    part,
+                    accent,
+                    feedback_payload,
+                    reply.get("turn_id"),
+                )
+            elif feedback_payload:
+                _apply_feedback(ctx, session_id, reply.get("turn_id"), feedback_payload)
+                ctx.registry.push_feedback(
+                    session_id, {"turn_id": reply.get("turn_id"), **feedback_payload}
+                )
         except Exception as exc:  # noqa: BLE001
             logger.exception("standalone 下一轮失败 session=%s", session_id)
             ctx.registry.push_error(
@@ -780,9 +847,19 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         text = (payload.get("text") or "").strip()
         if not text:
             raise HTTPException(400, "examiner_text 不能为空")
-        part = payload.get("part") or session.get("part_mode") or "part1"
-        if part == "full_mock":
-            part = "part1"
+        # An explicit part always wins. Otherwise follow the plan, which is what
+        # makes full_mock move from part1 to part2 to part3.
+        explicit_part = str(payload.get("part") or "").strip()
+        if explicit_part and explicit_part != "full_mock":
+            part = explicit_part
+        else:
+            plan = ctx.db.get_lesson_plan(session_id)
+            answered = len(
+                [t for t in ctx.db.list_turns(session_id) if (t.get("learner_transcript") or "").strip()]
+            )
+            part = _question_part(plan, answered, session.get("part_mode") or "part1")
+            if part == "full_mock":
+                part = "part1"
         accent = payload.get("accent") or ctx.db.get_profile().get("accent_preference", "uk")
 
         # 1) persist feedback for the previous learner turn (merged round-trip).
@@ -1335,18 +1412,20 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                 },
             },
             "downloads": _MODEL_DOWNLOADS,
+            "available": ASR_MODELS,
+            "selected": ctx.settings.asr_model,
         }
 
     @app.post("/api/models/download")
     async def models_download(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
         """Download a missing model into the user models dir (never into git)."""
         kind = str(payload.get("kind") or "asr").lower()
-        repos = {
-            "asr": str(payload.get("model") or "Systran/faster-whisper-small"),
-        }
-        if kind not in repos:
+        requested = str(payload.get("model") or "").strip()
+        if kind != "asr":
             raise HTTPException(400, "kind 只支持 asr（语音模型）")
-        repo_id = repos[kind]
+        if requested and requested not in ASR_MODELS:
+            raise HTTPException(400, "不支持的语音模型")
+        repo_id = requested or "Systran/faster-whisper-small"
         current = _MODEL_DOWNLOADS.get(kind)
         if current and current.get("state") == "running":
             return {"ok": True, "already_running": True, **current}

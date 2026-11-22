@@ -31,6 +31,37 @@ class _StubLLM(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if body.get("stream"):
+            content = json.dumps(
+                {
+                    "examiner_text": "Nice answer. What do you do at weekends?",
+                    "feedback_payload": {
+                        "quick_praise": "回答完整。",
+                        "corrected_text": "I went there yesterday.",
+                        "upgraded_text": "I usually spend my weekends outdoors.",
+                        "grammar_mistakes": [
+                            {
+                                "type": "tense",
+                                "wrong": "I go yesterday",
+                                "right": "I went yesterday",
+                                "note": "过去时间用过去式",
+                            }
+                        ],
+                    },
+                },
+                ensure_ascii=False,
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            step = 24
+            for start in range(0, len(content), step):
+                chunk = json.dumps({"choices": [{"delta": {"content": content[start:start + step]}}]})
+                self.wfile.write(("data: " + chunk + "\n\n").encode())
+                self.wfile.flush()
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            return
         messages = body.get("messages") or []
         user = ""
         for message in messages:
@@ -245,3 +276,51 @@ def test_model_failure_surfaces_error_state(daemon_server, temp_home, stub_llm):
             client.get(f"/api/sessions/{sid}").json().get("state") or {}
         ))
         assert "失败" in state["last_error"]
+
+def test_next_turn_stream_emits_text_before_feedback(stub_llm, temp_home):
+    from daemon.llm_coach import LLMConfigStore, StandaloneExaminer
+
+    store = LLMConfigStore(temp_home / "llm_config.json")
+    store.save({"llm_mode": "standalone", "llm_provider": "openai_compatible",
+                "llm_base_url": stub_llm, "llm_model": "stub", "llm_api_key": "k"})
+    examiner = StandaloneExaminer(store, temp_home / "SKILL.md")
+
+    seen: list[str] = []
+
+    async def on_text(text: str) -> None:
+        seen.append(text)
+
+    import asyncio
+
+    result = asyncio.run(
+        examiner.next_turn_stream(
+            {"part_mode": "part1", "questions": [{"text": "Q1"}, {"text": "Q2"}]},
+            "I go to the park", 120, {"overall_score": 80}, [], 1,
+            "instant_card_plus_voice", on_examiner_text=on_text,
+        )
+    )
+    assert seen, "on_examiner_text 没有在流式过程中触发"
+    assert seen[0] in result["examiner_text"]
+    assert result["feedback_payload"]["quick_praise"] == "回答完整。"
+
+def test_full_mock_switches_parts_and_completes(daemon_server, temp_home, stub_llm):
+    _configure(temp_home, stub_llm)
+    with httpx.Client(base_url=daemon_server.url, timeout=30) as client:
+        sid = client.post(
+            "/api/sessions", json={"part_mode": "full_mock", "drive_mode": "standalone"}
+        ).json()["session_id"]
+        parts: list[str] = []
+        for _ in range(14):
+            asked = [t for t in _turns(client, sid) if t.get("examiner_question")]
+            parts = [str(t.get("part")) for t in asked]
+            if "part3" in parts and len(asked) >= 2:
+                # keep answering until the plan is exhausted
+                pass
+            latest = asked[-1] if asked else None
+            if latest and "end of our speaking session" in str(latest.get("examiner_question", "")).lower():
+                break
+            client.post(f"/api/sessions/{sid}/audio", files={"file": ("a.wav", make_wav_bytes(), "audio/wav")})
+            time.sleep(0.4)
+        assert {"part1", "part2", "part3"} <= set(parts), parts
+        last = [t for t in _turns(client, sid) if t.get("examiner_question")][-1]
+        assert "end of our speaking session" in str(last.get("examiner_question", "")).lower()

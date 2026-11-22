@@ -357,3 +357,4 @@ export type WsEvent =
   | { type: 'lesson_ended'; status: string; reason?: string }
   | { type: 'report'; report: { markdown: string; bands: Record<string, number | null>; markdown_file_path?: string } }
   | { type: 'error'; message: string; stage?: string; ts?: number }
+  | { type: 'plan_completed'; session_id?: number; ts?: number }

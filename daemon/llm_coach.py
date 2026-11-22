@@ -24,7 +24,22 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
 PROVIDERS = {"deepseek", "openai_compatible", "ollama"}
-WRITABLE = {"llm_mode", "llm_provider", "llm_base_url", "llm_model", "llm_api_key", "voice_speed"}
+WRITABLE = {
+    "llm_mode",
+    "llm_provider",
+    "llm_base_url",
+    "llm_model",
+    "llm_api_key",
+    "voice_speed",
+    "asr_model",
+}
+
+#: Speech models a learner may download from the settings page.
+ASR_MODELS = {
+    "Systran/faster-whisper-small": "多语言 small（默认，中英都行）",
+    "Systran/faster-distil-whisper-large-v3": "英文高精度 distil-large-v3（约 1.4 GB）",
+    "mobiuslabsgmbh/faster-whisper-large-v3-turbo": "多语言 turbo（约 1.6 GB，最快）",
+}
 
 
 def _defaults() -> dict[str, Any]:
@@ -60,6 +75,54 @@ class LLMConfigStore:
             self._data = data
         return dict(self._data)
 
+    @staticmethod
+    def _extract_partial_string(buffer: str, field: str) -> str | None:
+        """Return field's value once its closing quote has streamed in.
+
+        Streaming JSON arrives in arbitrary chunks, so we look for the key, then
+        walk the value honouring backslash escapes; None means "not complete yet".
+        """
+        marker = '"' + field + '"'
+        start = buffer.find(marker)
+        if start == -1:
+            return None
+        colon = buffer.find(":", start + len(marker))
+        if colon == -1:
+            return None
+        quote = buffer.find('"', colon + 1)
+        if quote == -1:
+            return None
+        out: list[str] = []
+        index = quote + 1
+        escaped = False
+        while index < len(buffer):
+            char = buffer[index]
+            if escaped:
+                out.append(char)
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                return "".join(out)
+            else:
+                out.append(char)
+            index += 1
+        return None
+
+    def peek(self) -> dict[str, Any]:
+        """Read the file without caching (startup decisions must see a fresh file)."""
+        data = _defaults()
+        try:
+            if self.path.is_file():
+                stored = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(stored, dict):
+                    for key in WRITABLE:
+                        if key in stored:
+                            data[key] = stored[key]
+        except Exception:  # noqa: BLE001
+            pass
+        return data
+
     def save(self, patch: dict[str, Any]) -> dict[str, Any]:
         data = self.load()
         for key in WRITABLE:
@@ -78,6 +141,10 @@ class LLMConfigStore:
             elif key == "llm_mode":
                 value = str(value or "").strip().lower()
                 if value not in {"mcp", "standalone"}:
+                    continue
+            elif key == "asr_model":
+                value = str(value or "").strip()
+                if value and value not in ASR_MODELS:
                     continue
             else:
                 value = str(value or "").strip()
@@ -344,7 +411,7 @@ class StandaloneExaminer:
             text = "Good morning. Let's begin. " + first
         return {"examiner_text": text or ("Good morning. Let's begin. " + first)}
 
-    async def next_turn(
+    def _next_turn_prompts(
         self,
         plan: dict[str, Any] | None,
         transcript: str,
@@ -353,9 +420,9 @@ class StandaloneExaminer:
         stuck_hints: list[str] | None,
         question_index: int,
         feedback_style: str,
-        history: list[dict[str, str]] | None = None,
-        language: str = "en",
-    ) -> dict[str, Any]:
+        history: list[dict[str, str]] | None,
+        language: str,
+    ) -> tuple[str, str, str]:
         questions = self._plan_questions(plan)
         next_question = questions[question_index] if question_index < len(questions) else ""
         brief = json.dumps(pronunciation_brief or {}, ensure_ascii=False)
@@ -364,6 +431,8 @@ class StandaloneExaminer:
             for item in (history or [])[-6:]
         ) or "(none)"
         schema = (
+            # examiner_text must come FIRST: the daemon starts speaking it before
+            # the rest of the JSON has streamed in.
             '{"examiner_text": "<=2 sentences, English>", '
             '"feedback_payload": {"quick_praise": "...", "corrected_text": "...", '
             '"upgraded_text": "...", "grammar_mistakes": [{"error_category": '
@@ -386,10 +455,16 @@ class StandaloneExaminer:
                 "English example, then invite them back to English on the SAME question. "
                 "Do not advance to the next question."
             )
-            target_question = "Repeat the current question: " + (questions[max(0, question_index - 1)] if questions else "")
+            target_question = "Repeat the current question: " + (
+                questions[max(0, question_index - 1)] if questions else ""
+            )
         else:
             task = "React to the answer briefly, then ask the next question."
             target_question = "Next question: " + (next_question or "(wrap up this part)")
+        cue_card_rule = (
+            " If the next question is a cue card (Part 2), repeat it verbatim, including "
+            "the line 'You should say:' and all bullet points."
+        )
         user = (
             "Lesson part: " + str((plan or {}).get("part_mode", "part1")) + "\n"
             + "Previous turns:\n" + past + "\n\n"
@@ -398,19 +473,143 @@ class StandaloneExaminer:
             + "Pronunciation brief: " + brief + "\n"
             + "Hint words offered while stuck: " + json.dumps(stuck_hints or [], ensure_ascii=False) + "\n"
             + target_question + "\n"
-            + "Task: " + task + "\n"
+            + "Task: " + task + cue_card_rule + "\n"
             + style_rule + "\n\n"
-            + "Return JSON with exactly these keys:\n" + schema
+            + "Return JSON with exactly these keys, in this order:\n" + schema
         )
         system = (
             "You are an IELTS examiner and coach. Reply with ONE JSON object only. "
             "examiner_text is English unless the learner spoke Chinese. Notes inside "
             "feedback are Chinese. Never score pronunciation yourself: use the brief."
         )
+        return system, user, next_question
+
+    async def next_turn(
+        self,
+        plan: dict[str, Any] | None,
+        transcript: str,
+        wpm: float | None,
+        pronunciation_brief: dict[str, Any] | None,
+        stuck_hints: list[str] | None,
+        question_index: int,
+        feedback_style: str,
+        history: list[dict[str, str]] | None = None,
+        language: str = "en",
+    ) -> dict[str, Any]:
+        system, user, next_question = self._next_turn_prompts(
+            plan, transcript, wpm, pronunciation_brief, stuck_hints,
+            question_index, feedback_style, history, language,
+        )
         data = await self.chat_json(system, user)
         examiner_text = str(data.get("examiner_text") or "").strip() or (next_question or "Let's stop here.")
         feedback = self.normalize_feedback(data.get("feedback_payload"))
         return {"examiner_text": examiner_text, "feedback_payload": feedback}
+
+    def _chat_parts(
+        self,
+        system: str,
+        user: str,
+        override: dict[str, Any] | None = None,
+        stream: bool = False,
+    ) -> tuple[dict[str, Any], str, dict[str, str], dict[str, Any]]:
+        cfg = self._config(override)
+        base = (cfg["llm_base_url"] or DEFAULT_BASE_URL).rstrip("/")
+        url = base + "/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if cfg["llm_provider"] != "ollama" and cfg["llm_api_key"]:
+            headers["Authorization"] = "Bearer " + cfg["llm_api_key"]
+        body: dict[str, Any] = {
+            "model": cfg["llm_model"] or DEFAULT_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.7,
+        }
+        if cfg["llm_provider"] != "ollama":
+            body["response_format"] = {"type": "json_object"}
+        if stream:
+            body["stream"] = True
+        return cfg, url, headers, body
+
+    async def next_turn_stream(
+        self,
+        plan: dict[str, Any] | None,
+        transcript: str,
+        wpm: float | None,
+        pronunciation_brief: dict[str, Any] | None,
+        stuck_hints: list[str] | None,
+        question_index: int,
+        feedback_style: str,
+        history: list[dict[str, str]] | None = None,
+        language: str = "en",
+        on_examiner_text: Any = None,
+        timeout: float = 45.0,
+    ) -> dict[str, Any]:
+        """Stream the reply; call on_examiner_text the moment that field is complete.
+
+        The examiner can start speaking 1-2 s earlier while the correction card is
+        still being generated. Raises if the endpoint does not support streaming so
+        the caller can fall back to next_turn().
+        """
+        system, user, next_question = self._next_turn_prompts(
+            plan, transcript, wpm, pronunciation_brief, stuck_hints,
+            question_index, feedback_style, history, language,
+        )
+        _cfg, url, headers, body = self._chat_parts(system, user, stream=True)
+        buffer: list[str] = []
+        spoken = False
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as client:
+            async with client.stream("POST", url, json=body, headers=headers) as response:
+                if response.status_code == 400 and "response_format" in body:
+                    # Provider rejects json_object + stream: retry without it.
+                    body.pop("response_format", None)
+                    async with client.stream("POST", url, json=body, headers=headers) as retry:
+                        if retry.status_code >= 400:
+                            raise RuntimeError("模型返回 " + str(retry.status_code))
+                        async for line in retry.aiter_lines():
+                            spoken = await self._consume_stream_line(line, buffer, spoken, on_examiner_text)
+                elif response.status_code >= 400:
+                    raise RuntimeError("模型返回 " + str(response.status_code))
+                else:
+                    async for line in response.aiter_lines():
+                        spoken = await self._consume_stream_line(line, buffer, spoken, on_examiner_text)
+        text = "".join(buffer)
+        data = _extract_json(text)
+        if data is None:
+            raise RuntimeError("流式响应不是完整 JSON")
+        examiner_text = str(data.get("examiner_text") or "").strip() or (next_question or "Let's stop here.")
+        if not spoken and on_examiner_text is not None:
+            await on_examiner_text(examiner_text)
+        feedback = self.normalize_feedback(data.get("feedback_payload"))
+        return {"examiner_text": examiner_text, "feedback_payload": feedback}
+
+    async def _consume_stream_line(
+        self, line: str, buffer: list[str], spoken: bool, on_examiner_text: Any
+    ) -> bool:
+        if not line.startswith("data:"):
+            return spoken
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            return spoken
+        try:
+            chunk = json.loads(payload)
+        except json.JSONDecodeError:
+            return spoken
+        try:
+            delta = chunk["choices"][0].get("delta", {}).get("content") or ""
+        except (KeyError, IndexError, AttributeError):
+            return spoken
+        if not delta:
+            return spoken
+        buffer.append(delta)
+        if spoken or on_examiner_text is None:
+            return spoken
+        partial = self.store._extract_partial_string("".join(buffer), "examiner_text")
+        if partial:
+            await on_examiner_text(partial)
+            return True
+        return spoken
 
     async def report(
         self,

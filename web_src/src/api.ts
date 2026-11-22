@@ -75,6 +75,8 @@ export const api = {
     models_dir: string
     models: Record<string, { name: string; ready: boolean; language?: string }>
     downloads: Record<string, { state: string; repo?: string; error?: string }>
+    available?: Record<string, string>
+    selected?: string
   }>('/api/models/status'),
   downloadModel: (kind: string) => postJSON<{ ok: boolean }>('/api/models/download', { kind }),
   ttsWord: (text: string, accent: Accent) =>

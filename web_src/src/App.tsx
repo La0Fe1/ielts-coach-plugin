@@ -94,6 +94,7 @@ function App() {
   const [sendProgress, setSendProgress] = useState<SendProgress>(INITIAL_SEND_PROGRESS)
   const [pendingTranscript, setPendingTranscript] = useState<string | null>(null)
   const [liveStuck, setLiveStuck] = useState(false)
+  const [planCompleted, setPlanCompleted] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [appError, setAppError] = useState<AppError | null>(null)
   const [accent, setAccent] = useState<Accent>('uk')
@@ -123,7 +124,7 @@ function App() {
   const sessionIdRef = useRef<number | null>(sessionId)
   const phaseRef = useRef<Phase>(phase)
   const modeRef = useRef<MicMode>(mode)
-  const spaceDownRef = useRef(0)
+  const spacePressRef = useRef<{ startedAt: number; fromPhase: Phase } | null>(null)
   const mutedRef = useRef(muted)
   const currentPartRef = useRef('part1')
   const contextRef = useRef<LearnerContext | null>(null)
@@ -167,8 +168,8 @@ function App() {
   const syncSessionUrl = useCallback((id: number) => {
     try {
       const url = new URL(window.location.href)
+      // Only touch ?session=; ?embed=1 / ?desktop=1 must survive (iframe vs window).
       url.searchParams.set('session', String(id))
-      url.searchParams.delete('embed')
       window.history.replaceState(null, '', url.toString())
     } catch {
       /* file:// or restricted history - harmless */
@@ -445,6 +446,10 @@ function App() {
           void api.report(sessionId).then(setReport).catch(() => undefined)
         }
         if (event.type === 'report') void api.report(sessionId).then(setReport).catch(() => undefined)
+        if (event.type === 'plan_completed') {
+          setPlanCompleted(true)
+          showNotice('题单已经问完，点「结束本课」出报告')
+        }
         if (event.type === 'error') {
           setPendingTranscript(null)
           setPhase((current) => current === 'thinking' || current === 'submitting' ? 'idle' : current)
@@ -553,6 +558,7 @@ function App() {
       setPlan(result.plan)
       setReport(null)
       setTurns([])
+      setPlanCompleted(false)
       setPart2({ stage: 'idle', deadline: null })
       setAccent(setup.accent)
       setProfile((current) => current ? { ...current, target_band: setup.target_band, accent_preference: setup.accent, feedback_style: setup.feedback_style } : current)
@@ -779,6 +785,7 @@ function App() {
         return
       }
       if (event.code !== 'Space' || historyOpen || memoryOpen || planOpen || settingsOpen || reportOpen || selectedWord || phaseRef.current === 'gate') return
+      if (event.repeat) return
       event.preventDefault()
       if (practiceRecorderRef.current) {
         const minimum = practiceMinSec(practiceTargetRef.current ?? '')
@@ -786,21 +793,25 @@ function App() {
         else showNotice('跟读至少 ' + minimum + ' 秒，再完成重测')
         return
       }
-      if (modeRef.current === 'manual' && phaseRef.current === 'listening') {
-        // Hold space to talk, release after 350 ms to send. A quick tap keeps the
-        // old toggle behaviour.
-        if (!spaceDownRef.current) spaceDownRef.current = Date.now()
+      if (modeRef.current === 'manual') {
+        // Manual mode keeps BOTH habits working:
+        //  - press while idle starts recording, a long hold sends on release
+        //  - press while listening only timestamps; ANY release stops and sends
+        spacePressRef.current = { startedAt: Date.now(), fromPhase: phaseRef.current }
+        if (phaseRef.current === 'idle') stopOrStart()
         return
       }
       if (phaseRef.current === 'listening' || phaseRef.current === 'idle') stopOrStart()
     }
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.code !== 'Space' || !spaceDownRef.current) return
-      const held = Date.now() - spaceDownRef.current
-      spaceDownRef.current = 0
+      const press = spacePressRef.current
+      if (event.code !== 'Space' || !press) return
+      spacePressRef.current = null
       if (modeRef.current !== 'manual') return
       event.preventDefault()
-      if (held >= 350) stopOrStart()
+      const held = Date.now() - press.startedAt
+      if (press.fromPhase === 'listening') stopOrStart()
+      else if (held >= 350) stopOrStart()
     }
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
@@ -852,6 +863,13 @@ function App() {
     <div className="studio-layout">
       <main className="dialogue-pane">
         <div className="dialogue-part2">{part2Card}</div>
+        {planCompleted && (
+          <section className="plan-completed" role="status">
+            <strong>题单已经问完</strong>
+            <span>这一节可以收尾了，点「结束本课」生成四维报告。</span>
+            <button className="primary-button" onClick={() => void endLesson()}>结束本课并出报告</button>
+          </section>
+        )}
         <ChatStream turns={turns} activeExaminer={activeExaminer} selectedTurnId={selectedTurnId} phase={phase} pendingTranscript={pendingTranscript} onSelectTurn={setSelectedTurnId} onSelectWord={(word, audio) => setSelectedWord({ word, audio })} onReplay={replayAudio} renderCoach={renderCoach} />
         {appError && <section className="error-panel" role="alert"><strong>{appError.kind === 'microphone' ? '麦克风需要修复' : appError.kind === 'playback' ? '播放需要解锁' : appError.kind === 'audio' ? '音频格式或内容未被接受' : '本地连接需要检查'}</strong><p>{appError.message}</p><ol>{errorInstructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ol><div><button className="text-button" onClick={() => setAppError(null)}>知道了</button><button className="text-button" onClick={() => { setAppError(null); setSettingsOpen(true) }}>去设置</button><button className="secondary-button" onClick={() => { setAppError(null); if (phase === 'idle') void startListening() }}>重试</button></div></section>}
         {phase === 'ended' && <section className="ended-card"><p className="eyebrow">LESSON COMPLETE</p><h1>这节课完成了</h1><p>{report ? '报告、趋势图与复练清单已生成。' : '报告生成后会自动更新，也可以先查看课堂记录。'}</p><div className="ended-actions"><button className="secondary-button" onClick={() => setReportOpen(true)}>查看报告</button><button className="primary-button" onClick={restartLesson}>开始下一课</button></div></section>}
@@ -869,7 +887,7 @@ function App() {
         }} />}
     <PlanDrawer open={planOpen} plan={plan} onClose={() => setPlanOpen(false)} />
     <SettingsDrawer open={settingsOpen} profile={profile} onClose={() => setSettingsOpen(false)} onSaved={(saved) => { setProfile(saved); setAccent(saved.accent_preference) }} />
-    {reportOpen && <LessonReportView report={report} turns={turns} context={context} targetBand={profile?.target_band ?? session?.target_band ?? 7.5} onClose={() => setReportOpen(false)} onRestart={restartLesson} onDownload={downloadReport} onSpeak={(text) => void speakText(text)} onReplay={replayAudio} onSelectWord={(word, audio) => setSelectedWord({ word, audio })} />}
+    {reportOpen && <LessonReportView accent={accent} report={report} turns={turns} context={context} targetBand={profile?.target_band ?? session?.target_band ?? 7.5} onClose={() => setReportOpen(false)} onRestart={restartLesson} onDownload={downloadReport} onSpeak={(text) => void speakText(text)} onReplay={replayAudio} onSelectWord={(word, audio) => setSelectedWord({ word, audio })} />}
   </div>
 }
 

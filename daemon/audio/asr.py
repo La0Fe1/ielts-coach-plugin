@@ -220,15 +220,14 @@ class ASRService:
                 # at it, otherwise faster-whisper looks in ~/.ielts-coach/models and,
                 # being offline, fails with "cannot find a cached snapshot".
                 bundled = os.environ.get("IELTS_COACH_MODELS", "").strip()
-                download_root = (
-                    str(Path(bundled) / "hf") if bundled else str(self.settings.paths.models_dir)
-                )
+                user_dir = Path(self.settings.paths.models_dir)
+                download_root, local_only = self._cache_for(name, bundled, user_dir)
                 self._model = WhisperModel(
                     name,
                     device=self.settings.device,
                     compute_type=self.settings.asr_compute_type,
                     download_root=download_root,
-                    local_files_only=bool(bundled),
+                    local_files_only=local_only,
                 )
                 self._load_error = None
                 self._load_seconds = round(time.time() - started, 2)
@@ -239,6 +238,33 @@ class ASRService:
                 logger.warning("加载 ASR 模型 %s 失败: %s", name, exc)
         self._load_error = str(last_error)
         raise RuntimeError(f"Faster-Whisper 模型加载失败: {last_error}")
+
+    @staticmethod
+    def _cache_for(name: str, bundled: str, user_dir: Path) -> tuple[str, bool]:
+        """Pick the cache that actually holds this model.
+
+        A learner may download a different checkpoint from settings while running a
+        portable copy: that file lands in ~/.ielts-coach/models, so the bundled
+        offline cache must not be forced (it would look in the wrong directory and
+        refuse to download).
+        """
+        repo = name
+        if "/" not in repo:
+            repo = "Systran/faster-whisper-" + repo
+        folder = "models--" + repo.replace("/", "--")
+
+        def has(base: Path) -> bool:
+            return (base / folder).is_dir()
+
+        if user_dir and has(user_dir):
+            return str(user_dir), False
+        if bundled:
+            bundle_cache = Path(bundled) / "hf"
+            if has(bundle_cache):
+                return str(bundle_cache), True
+            # Not in the bundle: download into the user cache.
+            return str(user_dir), False
+        return str(user_dir), False
 
     def is_ready(self) -> bool:
         """True once the model is resident (no loading attempt triggered)."""

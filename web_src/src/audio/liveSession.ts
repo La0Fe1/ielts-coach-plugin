@@ -66,6 +66,7 @@ export class LiveUtterance {
   private resolver: ((result: UtteranceResult | null) => void) | null = null
   private guard: number | undefined
   private probed = false
+  private lastProbeId?: string
 
   constructor(sessionId: number, callbacks: LiveCallbacks = {}) {
     this.sessionId = sessionId
@@ -167,8 +168,9 @@ export class LiveUtterance {
     const url = '/api/sessions/' + this.sessionId + '/probe?pause_sec=' + silenceSec.toFixed(2)
     void fetch(url, { method: 'POST', body: form })
       .then((response) => (response.ok ? response.json() : null))
-      .then((result: { complete?: boolean; detail?: string } | null) => {
+      .then((result: { complete?: boolean; detail?: string; probe_id?: string } | null) => {
         if (!result || this.finished) return
+        if (result.probe_id) this.lastProbeId = result.probe_id
         if (result.complete === false) {
           // Unfinished sentence: give the learner room instead of cutting at 1.8 s.
           this.silenceSec = 3.5
@@ -183,7 +185,10 @@ export class LiveUtterance {
 
   private handleVad(event: VadEvent) {
     if (event.speech_started || event.speech) this.speechSeen = true
-    if (event.speech_started) this.probed = false
+    if (event.speech_started) {
+      this.probed = false
+      this.lastProbeId = undefined
+    }
     if (event.speech_sec !== undefined) this.speechSec = event.speech_sec
     this.updateDynamicSilence()
     this.updateSendProgress(event.trailing_silence ?? 0)
@@ -275,6 +280,7 @@ export class LiveUtterance {
         speechSec: Math.max(this.speechSec, 0),
         reason: this.stopReason,
         enoughSpeech: !silent && (this.speechSec >= 0.25 || result.durationSec >= 0.35),
+        probeId: this.lastProbeId,
       })
     } catch (error) {
       this.callbacks.onError?.(String(error))

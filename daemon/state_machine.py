@@ -262,6 +262,13 @@ class LessonRegistry:
     def push_report(self, session_id: int, report: dict[str, Any]) -> None:
         self.publish(session_id, {"type": "report", "report": report, "ts": time.time()})
 
+    def push_plan_completed(self, session_id: int) -> None:
+        """Every planned question has been asked: prompt the learner to finish."""
+        self.publish(
+            session_id,
+            {"type": "plan_completed", "session_id": session_id, "ts": time.time()},
+        )
+
     def push_error(self, session_id: int, message: str, stage: str = "") -> None:
         """Surface a driver failure to the UI instead of leaving it waiting forever."""
         state = self.get(session_id)

@@ -1,6 +1,10 @@
-import type { BandHistoryItem, LearnerContext, LessonReport, PronWord, Turn } from '../types'
+import { useEffect, useRef, useState } from 'react'
+import { api } from '../api'
+import { startRecording, type ActiveRecording } from '../audio/pcmRecorder'
+import type { Accent, BandHistoryItem, LearnerContext, LessonReport, PronWord, Turn } from '../types'
 
 interface LessonReportViewProps {
+  accent: Accent
   report: LessonReport | null
   turns: Turn[]
   context: LearnerContext | null
@@ -70,7 +74,7 @@ function renderMarkdown(markdown: string) {
   })
 }
 
-export function LessonReportView({ report, turns, context, targetBand, onClose, onRestart, onDownload, onSpeak, onReplay, onSelectWord }: LessonReportViewProps) {
+export function LessonReportView({ accent, report, turns, context, targetBand, onClose, onRestart, onDownload, onSpeak, onReplay, onSelectWord }: LessonReportViewProps) {
   if (!report) return <div className="report-overlay" role="dialog" aria-modal="true" aria-label="课程报告"><main className="report"><header className="report-head"><div><p className="eyebrow">LESSON REPORT</p><h1>课程报告</h1></div><button className="close-button" onClick={onClose} aria-label="关闭报告">×</button></header><section className="report-waiting"><h2>报告还没有生成</h2><p>结束本课后，评分与报告会通过本地 WebSocket 推送并自动刷新。没有收到前只显示这个占位，不虚构分数。</p></section><footer className="report-footer"><button className="secondary-button" onClick={onClose}>返回</button></footer></main></div>
 
   const bands = report.report_json?.bands ?? {}
@@ -79,6 +83,7 @@ export function LessonReportView({ report, turns, context, targetBand, onClose, 
   const wordMap = new Map<string, PronWord>()
   turns.forEach((turn) => turn.pronunciation_json?.words.forEach((word) => { if (word.score !== null && word.score < 80 && !wordMap.has(word.word)) wordMap.set(word.word, word) }))
   const weakWords = [...wordMap.values()].sort((a, b) => (a.score ?? 100) - (b.score ?? 100)).slice(0, 12)
+  const [bootcamp, setBootcamp] = useState(false)
   const nextPlan = report.report_json?.next_lesson_plan || context?.last_lesson_plan?.content
   const fluentTurns = turns.filter((turn) => (turn.learner_transcript || '').trim() && turn.wpm)
   const avgWpm = fluentTurns.length > 0
@@ -93,9 +98,100 @@ export function LessonReportView({ report, turns, context, targetBand, onClose, 
     <header className="report-head"><div><p className="eyebrow">LESSON REPORT · #{report.session_id}</p><h1>这节课，留下了什么</h1><p>{new Date(report.created_at).toLocaleString('zh-CN')} · 成绩、原文音频与复练入口</p></div><button className="close-button" onClick={onClose} aria-label="关闭报告">×</button></header>
     <section className="report-overview"><div className="report-fluency-stats"><div><span>平均语速</span><strong>{avgWpm ?? '—'}<small> wpm</small></strong></div><div><span>总开口</span><strong>{totalSpeechSec}<small> 秒</small></strong></div><div><span>停顿</span><strong>{totalPauses}<small> 次</small></strong></div></div><div className="overall-score"><span>Overall</span><strong>{overall?.toFixed(1) ?? '—'}</strong><small>虚线为目标 {targetBand.toFixed(1)}</small></div><div className="report-chart-grid"><div><h2>四维能力雷达</h2><BandRadar bands={bands} target={targetBand} /></div><div><h2>近 {history.length} 课 Overall 趋势</h2>{history.length > 0 ? <BandTrend history={history} target={targetBand} /> : <p className="muted">完成更多课程后，这里会显示真实历史折线。</p>}</div></div><div className="band-grid">{RADAR_KEYS.map((item) => <div className="band-score" key={item.key}><strong>{getBand(bands, item.key)?.toFixed(1) ?? '—'}</strong><span>{item.label}</span></div>)}</div></section>
     <section className="report-section"><h2>语法与表达错题本</h2>{mistakes.length > 0 ? <ul className="report-mistakes">{mistakes.map((mistake, index) => <li key={`${mistake.turnId}-${index}`}><span>第 {mistake.turnIndex} 轮 · {mistake.error_category}</span><p><s>{mistake.original_excerpt}</s> → <b>{mistake.corrected_excerpt}</b></p><p>{mistake.explanation}</p><div className="report-inline-actions">{mistake.audioUrl && <button className="text-button" onClick={() => onReplay(mistake.audioUrl ?? '')}>听我的原句</button>}<button className="text-button" onClick={() => onSpeak(mistake.upgraded_excerpt || mistake.corrected_excerpt)}>听正确示范</button></div></li>)}</ul> : <p className="muted">本课没有记录语法错题。</p>}</section>
-    <section className="report-section"><h2>发音复练清单</h2>{weakWords.length > 0 ? <div className="report-word-grid">{weakWords.map((word, index) => { const turn = turns.find((item) => item.pronunciation_json?.words.includes(word)); return <button key={`${word.word}-${index}`} className={`report-word ${word.color}`} onClick={() => onSelectWord(word, turn?.learner_audio_url ?? null)}><strong>{word.word}</strong><span>{word.ipa ? `/${word.ipa}/` : '查看音素'} · {word.score} 分</span><small>点击对比并跟读</small></button> })}</div> : <p className="muted">本课没有返回低分单词。</p>}</section>
+    <section className="report-section"><h2>发音复练清单</h2>{weakWords.length > 0 && <button className="secondary-button bootcamp-open" onClick={() => setBootcamp(true)}>▶ 连刷本课错词（{weakWords.length}）</button>}{weakWords.length > 0 ? <div className="report-word-grid">{weakWords.map((word, index) => { const turn = turns.find((item) => item.pronunciation_json?.words.includes(word)); return <button key={`${word.word}-${index}`} className={`report-word ${word.color}`} onClick={() => onSelectWord(word, turn?.learner_audio_url ?? null)}><strong>{word.word}</strong><span>{word.ipa ? `/${word.ipa}/` : '查看音素'} · {word.score} 分</span><small>点击对比并跟读</small></button> })}</div> : <p className="muted">本课没有返回低分单词。</p>}</section>
     {nextPlan && <section className="report-section"><h2>下节专项处方</h2><p className="next-prescription">{nextPlan}</p></section>}
     {report.report_markdown && <details className="full-report"><summary>查看完整报告原文</summary><div className="markdown">{renderMarkdown(report.report_markdown)}</div></details>}
     <footer className="report-footer"><button className="secondary-button" onClick={onDownload}>下载 Markdown</button><button className="primary-button" onClick={onRestart}>开始下一课</button></footer>
-  </main></div>
+  </main>
+  {bootcamp && <WordBootcamp words={weakWords} accent={accent} sessionId={report.session_id} onClose={() => setBootcamp(false)} />}
+  </div>
+}
+function WordBootcamp({ words, accent, sessionId, onClose }: {
+  words: PronWord[]
+  accent: Accent
+  sessionId: number
+  onClose: () => void
+}) {
+  const [index, setIndex] = useState(0)
+  const [status, setStatus] = useState<'idle' | 'recording' | 'uploading' | 'scored'>('idle')
+  const [score, setScore] = useState<number | null>(null)
+  const [conquered, setConquered] = useState<Record<string, boolean>>({})
+  const recorderRef = useRef<ActiveRecording | null>(null)
+  const word = words[index]
+
+  useEffect(() => () => { recorderRef.current?.cancel() }, [])
+  useEffect(() => { setStatus('idle'); setScore(null) }, [index])
+  if (!word) return null
+
+  const playDemo = async () => {
+    try {
+      const data = await api.ttsWord(word.word, accent)
+      if (data.url) void new Audio(data.url).play()
+    } catch { /* demo audio is best-effort */ }
+  }
+  const startPractice = async () => {
+    if (status === 'recording') {
+      const recorder = recorderRef.current
+      recorderRef.current = null
+      if (!recorder) return
+      setStatus('uploading')
+      const result = await recorder.stop()
+      if (result.durationSec < 0.5) { setStatus('idle'); return }
+      try {
+        const data = await api.practiceSentence(sessionId, result.blob, word.word, accent)
+        const value = data.pronunciation?.overall_score ?? null
+        setScore(value)
+        setStatus('scored')
+        if (value !== null && value >= 75) {
+          setConquered((current) => ({ ...current, [word.word]: true }))
+          window.setTimeout(() => setIndex((current) => Math.min(words.length, current + 1)), 900)
+        }
+      } catch { setStatus('idle') }
+      return
+    }
+    try {
+      recorderRef.current = await startRecording({})
+      setStatus('recording')
+    } catch { setStatus('idle') }
+  }
+
+  const doneCount = Object.keys(conquered).length
+  if (index >= words.length) {
+    return (
+      <div className="drawer-backdrop" onClick={onClose}>
+        <section className="bootcamp" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+          <h2>本轮连刷完成</h2>
+          <p>攻克 {doneCount} / {words.length} 个词。</p>
+          <button className="primary-button" onClick={onClose}>回到报告</button>
+        </section>
+      </div>
+    )
+  }
+  return (
+    <div className="drawer-backdrop" onClick={onClose}>
+      <section className="bootcamp" role="dialog" aria-modal="true" aria-label="错词连刷" onClick={(event) => event.stopPropagation()}>
+        <header className="bootcamp-head">
+          <span>第 {index + 1} / {words.length} 词</span>
+          <span>已攻克 {doneCount}</span>
+          <button className="close-button" onClick={onClose} aria-label="关闭连刷">×</button>
+        </header>
+        <h2>{word.word}</h2>
+        <p className="phoneme-ipa">{word.ipa ? '/' + word.ipa + '/' : '—'}</p>
+        {score !== null && (
+          <p className={score >= 75 ? 'is-ok' : 'is-pending'}>
+            {score >= 75 ? '🟢 已攻克 ' : '再练一次 '}{score} 分
+          </p>
+        )}
+        <div className="bootcamp-actions">
+          <button className="secondary-button" onClick={() => void playDemo()}>听示范</button>
+          <button className="primary-button" onClick={() => void startPractice()} disabled={status === 'uploading'}>
+            {status === 'recording' ? '读完点这里评分' : status === 'uploading' ? '评分中…' : '跟读一次'}
+          </button>
+          <button className="text-button" onClick={() => setIndex(index + 1)}>跳过</button>
+          <button className="text-button" onClick={() => setIndex(Math.min(words.length, index + 1))}>下一个</button>
+        </div>
+        <p className="muted">得分 ≥ 75 自动进入下一个词。</p>
+      </section>
+    </div>
+  )
 }

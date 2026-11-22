@@ -26,7 +26,36 @@ export function SettingsDrawer({ open, profile, onClose, onSaved }: SettingsDraw
   const [message, setMessage] = useState<string | null>(null)
   const [micStatus, setMicStatus] = useState<'idle' | 'recording' | 'playing'>('idle')
   const [models, setModels] = useState<Record<string, { name: string; ready: boolean }> | null>(null)
-  const [modelBusy, setModelBusy] = useState<string | null>(null)
+  const [available, setAvailable] = useState<Record<string, string>>({})
+  const [asrChoice, setAsrChoice] = useState('')
+  const [download, setDownload] = useState<{ state: string; error?: string } | null>(null)
+  const [downloading, setDownloading] = useState(false)
+
+  const refreshModels = async () => {
+    const data = await api.modelsStatus()
+    setModels(data.models)
+    setAvailable(data.available ?? {})
+    setDownload(data.downloads?.asr ?? null)
+    return data
+  }
+
+  const downloadAsr = async () => {
+    setDownloading(true)
+    try {
+      await api.downloadModel(asrChoice || 'Systran/faster-whisper-small')
+      setDownload({ state: 'running' })
+      // Poll until the backend reports done/error so the user sees real progress.
+      for (let attempt = 0; attempt < 240; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1500))
+        const data = await refreshModels()
+        if ((data.downloads?.asr?.state ?? 'error') !== 'running') break
+      }
+    } catch (error) {
+      setDownload({ state: 'error', error: String(error) })
+    } finally {
+      setDownloading(false)
+    }
+  }
   const micRef = useRef<ActiveRecording | null>(null)
   const micUrlRef = useRef<string | null>(null)
 
@@ -49,7 +78,13 @@ export function SettingsDrawer({ open, profile, onClose, onSaved }: SettingsDraw
     if (!open) return
     let alive = true
     api.modelsStatus()
-      .then((data) => { if (alive) setModels(data.models) })
+      .then((data) => {
+        if (!alive) return
+        setModels(data.models)
+        setAvailable(data.available ?? {})
+        setAsrChoice(data.selected ?? '')
+        setDownload(data.downloads?.asr ?? null)
+      })
       .catch(() => undefined)
     return () => { alive = false }
   }, [open])
@@ -124,6 +159,18 @@ export function SettingsDrawer({ open, profile, onClose, onSaved }: SettingsDraw
     <section className="drawer-section"><h3>考官驱动</h3><div className="choice-chips"><button className={mode === 'standalone' ? 'selected' : ''} onClick={() => setMode('standalone')}>界面直连接课</button><button className={mode === 'mcp' ? 'selected' : ''} onClick={() => setMode('mcp')}>外部代理接课</button></div><p className="muted">直连接课在创建后自动生成计划并播报第一题；外部代理接课等待 dsh / Cursor 驱动。</p></section>
     <section className="drawer-section"><h3>OpenAI 兼容模型</h3><div className="settings-form"><label>Provider<select value={provider} onChange={(event) => changeProvider(event.target.value)}><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="ollama">Ollama</option></select></label><label>Base URL<input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} spellCheck={false} /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} spellCheck={false} /></label><label>API Key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={profile?.has_api_key ? '已保存，留空则不修改' : provider === 'ollama' ? 'Ollama 可留空' : '输入本机保存的 Key'} autoComplete="off" /></label></div><button className="secondary-button settings-test" onClick={() => void testConnection()} disabled={testing}>{testing ? '正在测试…' : '测试模型连接'}</button>{testResult && <div className={`connection-result ${testResult.ok ? 'is-ok' : 'is-error'}`}><strong>{testResult.ok ? `连接成功${testResult.latency_ms !== undefined ? ` · ${testResult.latency_ms}ms` : ''}` : '连接未成功'}</strong><p>{testResult.message}</p></div>}</section>
     <section className="drawer-section"><h3>本机模型</h3>
+        {available && Object.keys(available).length > 0 && (
+          <label className="model-select">识别模型
+            <select value={asrChoice} onChange={(event) => {
+              setAsrChoice(event.target.value)
+              void api.updateProfile({ asr_model: event.target.value }).catch(() => undefined)
+            }}>
+              {Object.entries(available).map(([repo, label]) => <option value={repo} key={repo}>{label}</option>)}
+            </select>
+          </label>
+        )}
+        {download && download.state === 'running' && <p className="muted">正在下载模型，页面会自动刷新状态…</p>}
+        {download && download.state === 'error' && <p role="alert">下载失败：{download.error ?? '请检查网络'}</p>}
         {!models ? <p className="muted">正在读取模型状态…</p> : (
           <ul className="model-status-list">
             {(['asr', 'tts', 'pronunciation'] as const).map((key) => {
@@ -134,13 +181,10 @@ export function SettingsDrawer({ open, profile, onClose, onSaved }: SettingsDraw
                   <strong>{key === 'asr' ? '语音识别' : key === 'tts' ? '语音合成' : '发音评分'}</strong>
                   <span className={item.ready ? 'is-ok' : 'is-pending'}>{item.ready ? '就绪' : '未加载'}</span>
                   <em>{item.name}</em>
-                  {!item.ready && key === 'asr' && (
-                    <button className="text-button" disabled={modelBusy === key} onClick={async () => {
-                      setModelBusy(key)
-                      try { await api.downloadModel('asr') } catch { /* status refresh below */ }
-                      setModelBusy(null)
-                      api.modelsStatus().then((data) => setModels(data.models)).catch(() => undefined)
-                    }}>{modelBusy === key ? '下载中…' : '按需下载'}</button>
+                  {key === 'asr' && (
+                    <button className="text-button" disabled={downloading} onClick={() => void downloadAsr()}>
+                      {downloading ? '下载中…' : '下载所选模型'}
+                    </button>
                   )}
                 </li>
               )

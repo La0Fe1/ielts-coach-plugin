@@ -281,7 +281,10 @@ def run(session_id: int | None, base: str, on_top: bool, width: int, height: int
 
         threading.Thread(target=watch, name="session-watcher", daemon=True).start()
 
-    webview.settings['REMOTE_DEBUGGING_PORT'] = 9222
+    # Only open the DevTools port when debugging: leaving 9222 listening in a
+    # shipped desktop app is both a security smell and a port-conflict source.
+    if os.environ.get("IELTS_COACH_DEBUG") == "1":
+        webview.settings['REMOTE_DEBUGGING_PORT'] = 9222
     webview.start(
         start_watcher,
         private_mode=False,
