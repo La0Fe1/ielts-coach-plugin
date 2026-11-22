@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ielts-coach"
-version = "1.5.0"
+version = "1.5.1"
 description = "Local IELTS Speaking Coach: desktop window + MCP bridge + audio daemon, works from any coding agent"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,6 +30,11 @@ models = [
     "kokoro>=0.9.4",
     "torch>=2.2",
     "torchaudio>=2.2",
+    # Silero VAD (real streaming VAD) and the neural edge voices. Both were missing
+    # from the portable build, so the packaged daemon silently fell back to the
+    # energy VAD and Kokoro-only voices.
+    "silero-vad>=6.0",
+    "edge-tts>=7.0",
 ]
 phase2 = [
     "transformers>=4.40",

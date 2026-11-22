@@ -35,7 +35,9 @@ EMBED_URL = f"https://www.python.org/ftp/python/{PY_VERSION}/python-{PY_VERSION}
 TORCH_CPU = "https://download.pytorch.org/whl/cpu"
 MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
-CODE_DIRS = ["daemon", "desktop", "mcp_bridge", "skills"]
+# "database" holds schema.sql: without it the packaged daemon dies on startup with
+# "database/schema.sql 未找到" (v1.2-v1.5 shipped that way).
+CODE_DIRS = ["daemon", "desktop", "mcp_bridge", "skills", "database"]
 CODE_FILES = ["pyproject.toml", "README.md", "LICENSE"]
 
 STARTER = """@echo off
