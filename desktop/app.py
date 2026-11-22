@@ -190,9 +190,13 @@ def run(session_id: int | None, base: str, on_top: bool, width: int, height: int
         return 2
 
     healthy = ensure_daemon(base)
+    window_kwargs = (
+        {"html": SPLASH}
+        if not healthy
+        else {"url": build_url(base, session_id)}
+    )
     window = webview.create_window(
         "IELTS 口语教练",
-        html=SPLASH if not healthy else build_url(base, session_id),
         width=width,
         height=height,
         min_size=(360, 560),
@@ -200,15 +204,44 @@ def run(session_id: int | None, base: str, on_top: bool, width: int, height: int
         on_top=on_top,
         easy_drag=False,
         text_select=True,
+        **window_kwargs,
     )
 
     current = {"session": session_id, "loaded": healthy}
+    permission_subscribed = False
+
+    def grant_microphone_permission() -> None:
+        nonlocal permission_subscribed
+        if permission_subscribed:
+            return
+        edge = getattr(window, "gui", None)
+        webview_control = getattr(edge, "webview", None)
+        core = getattr(webview_control, "CoreWebView2", None)
+        if core is None:
+            return
+
+        import clr
+
+        clr.AddReference("Microsoft.Web.WebView2.Core")
+        from Microsoft.Web.WebView2.Core import (
+            CoreWebView2PermissionKind,
+            CoreWebView2PermissionState,
+        )
+
+        def on_permission_requested(_sender, args) -> None:
+            if args.PermissionKind == CoreWebView2PermissionKind.Microphone:
+                args.State = CoreWebView2PermissionState.Allow
+                args.Handled = True
+
+        core.add_PermissionRequested(on_permission_requested)
+        permission_subscribed = True
 
     def watch() -> None:
         """Follow the lesson the agent just created, without a second window."""
         while True:
             time.sleep(2.0)
             try:
+                grant_microphone_permission()
                 if getattr(window, "closed", False):
                     return
                 if not current["loaded"]:
@@ -234,7 +267,12 @@ def run(session_id: int | None, base: str, on_top: bool, width: int, height: int
 
         threading.Thread(target=watch, name="session-watcher", daemon=True).start()
 
-    webview.start(start_watcher, debug=False)
+    webview.settings['REMOTE_DEBUGGING_PORT'] = 9222
+    webview.start(
+        start_watcher,
+        private_mode=False,
+        storage_path=str(home_dir() / 'webview-data'),
+    )
     return 0
 
 
@@ -243,8 +281,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session", type=int, default=None, help="要打开的课程 id")
     parser.add_argument("--port", type=int, default=int(os.environ.get("IELTS_COACH_PORT", "8765")))
     parser.add_argument("--on-top", action="store_true", help="窗口置顶")
-    parser.add_argument("--width", type=int, default=460)
-    parser.add_argument("--height", type=int, default=820)
+    # Wide enough for the two-column workbench on a normal desktop; still narrow
+    # enough for a side panel (min_size keeps it usable there).
+    parser.add_argument("--width", type=int, default=1120)
+    parser.add_argument("--height", type=int, default=780)
     parser.add_argument("--replace", action="store_true", help="忽略已有窗口，强制新开")
     args = parser.parse_args(argv)
 

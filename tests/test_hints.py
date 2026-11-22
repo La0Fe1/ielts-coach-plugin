@@ -11,14 +11,15 @@ def test_split_english_only():
     assert segments == [("en", "Good morning. Where is your hometown?")]
 
 
-def test_split_bilingual_keeps_sentences_whole():
+def test_split_bilingual_pronounces_embedded_english():
     segments = split_bilingual(
         "Nice answer. 注意 think 里的 θ 音，舌尖轻触上齿。Now, what do you like most?"
     )
-    assert [lang for lang, _ in segments] == ["en", "zh", "en"]
-    # the embedded English term must stay inside the Chinese run
-    assert "think" in segments[1][1]
-    assert len(segments) == 3
+    # English words inside a Chinese sentence get their own English run so the
+    # taught word is not read with a Mandarin accent.
+    assert [lang for lang, _ in segments] == ["en", "zh", "en", "zh", "en"]
+    assert ("en", "think") in segments
+    assert "θ" in segments[3][1]
 
 
 def test_split_merges_consecutive_same_language():

@@ -146,6 +146,12 @@ class Database:
             conn = self.conn
             conn.executescript(sql)
             conn.executescript(_EXTRA_SCHEMA)
+            # v2.5: sessions learn who drives them (mcp bridge vs standalone LLM).
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+            if "drive_mode" not in columns:
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN drive_mode TEXT NOT NULL DEFAULT 'mcp'"
+                )
             conn.commit()
 
     def table_names(self) -> list[str]:
@@ -198,12 +204,16 @@ class Database:
         topic_title: str,
         feedback_style: str = "instant_card_plus_voice",
         target_band: float | None = None,
+        drive_mode: str = "mcp",
     ) -> dict[str, Any]:
         if part_mode not in VALID_PART_MODES:
             part_mode = "part1"
+        if drive_mode not in {"mcp", "standalone"}:
+            drive_mode = "mcp"
         cursor = self._execute(
-            "INSERT INTO sessions (part_mode, topic_title, feedback_style) VALUES (?, ?, ?)",
-            (part_mode, topic_title, feedback_style),
+            "INSERT INTO sessions (part_mode, topic_title, feedback_style, drive_mode)"
+            " VALUES (?, ?, ?, ?)",
+            (part_mode, topic_title, feedback_style, drive_mode),
         )
         session_id = int(cursor.lastrowid)
         if target_band is not None:

@@ -353,6 +353,10 @@ async def start_lesson(
         "topic_hint": topic_hint or "",
         "feedback_style": feedback_style,
         "auto_plan": True,
+        # Always MCP-driven: this call comes from an agent that will speak each
+        # turn itself. Without this, a configured standalone engine would hijack
+        # the lesson and the agent's own questions would collide with it.
+        "drive_mode": "mcp",
     }
     if target_band:
         body["target_band"] = target_band

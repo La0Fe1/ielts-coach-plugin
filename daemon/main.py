@@ -49,6 +49,7 @@ from .completeness import analyze as analyze_completeness
 from .completeness import is_stop_command
 from .db import Database
 from .hints import HintBook, analyze_stuck, used_words
+from .llm_coach import LLMConfigStore, StandaloneExaminer
 from .planner import LessonPlanner, QuestionBank
 from .state_machine import STATUS_ENDED, STATUS_WAITING, LessonRegistry
 
@@ -126,6 +127,12 @@ class DaemonContext:
         self.bank = QuestionBank()
         self.planner = LessonPlanner(self.bank, self.db)
         self.hints = HintBook()
+        # Standalone mode: the desktop window can drive a lesson without an agent.
+        self.llm_store = LLMConfigStore(self.paths.home / "llm_config.json")
+        self.llm = StandaloneExaminer(
+            self.llm_store,
+            Path(__file__).resolve().parents[1] / "skills" / "ielts-speaking-coach" / "SKILL.md",
+        )
         self.started_at = time.time()
         self.warmup_state: dict[str, Any] = {
             "asr": "pending",
@@ -217,6 +224,7 @@ _MCP_HTTP = None
 
 #: probe_id -> {asr, duration, ts}. The live turn-taking probe already transcribed
 #: the sentence, so the final upload can skip ASR when the audio is the same length.
+_MODEL_DOWNLOADS: dict[str, dict[str, Any]] = {}
 _PROBE_CACHE: dict[str, dict[str, Any]] = {}
 _PROBE_TTL_SEC = 180.0
 
@@ -345,11 +353,36 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------------ #
     @app.get("/api/profile")
     async def get_profile() -> dict[str, Any]:
-        return ctx.db.get_profile()
+        profile = ctx.db.get_profile()
+        profile.update(ctx.llm_store.public_view())
+        return profile
 
     @app.patch("/api/profile")
-    async def patch_profile(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        return ctx.db.update_profile(**payload)
+    async def patch_profile(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        llm_patch = {
+            key: value
+            for key, value in (payload or {}).items()
+            if key.startswith("llm_") or key == "voice_speed"
+        }
+        rest = {key: value for key, value in (payload or {}).items() if key not in llm_patch}
+        profile = ctx.db.update_profile(**rest) if rest else ctx.db.get_profile()
+        if llm_patch:
+            ctx.llm_store.save(llm_patch)
+        profile.update(ctx.llm_store.public_view())
+        return profile
+
+    @app.post("/api/llm/test")
+    async def llm_test(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        override = {
+            key: (payload or {}).get(key)
+            for key in ("llm_provider", "llm_base_url", "llm_model", "llm_api_key")
+            if (payload or {}).get(key)
+        }
+        stored = ctx.llm_store.load()
+        if not override.get("llm_api_key") and stored["llm_provider"] != "ollama" and not stored["llm_api_key"]:
+            return {"ok": False, "message": "还没有填 API Key", "latency_ms": None}
+        result = await ctx.llm.test(override or None)
+        return result
 
     @app.get("/api/learner/context")
     async def learner_context() -> dict[str, Any]:
@@ -388,6 +421,154 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         plan = ctx.planner.plan(part_mode=part_mode, topic_hint=topic_hint or None, seed=seed)
         return plan.as_dict()
 
+    # ------------------------------------------------------------------ #
+    # Standalone driver (no external agent)
+    # ------------------------------------------------------------------ #
+    async def _push_examiner(
+        session_id: int,
+        text: str,
+        part: str,
+        accent: str,
+        feedback_payload: dict[str, Any] | None = None,
+        turn_id_for_feedback: int | None = None,
+    ) -> dict[str, Any]:
+        """Speak a question and start waiting for the learner (shared by both modes)."""
+        if feedback_payload:
+            _apply_feedback(ctx, session_id, turn_id_for_feedback, feedback_payload)
+        loop = asyncio.get_running_loop()
+        tts_result = await loop.run_in_executor(None, ctx.resolve_tts, text, accent)
+        turn = ctx.db.create_turn(
+            session_id=session_id,
+            part=part,
+            examiner_question=text,
+            examiner_tts_path=tts_result.get("path"),
+        )
+        ctx.registry.start_waiting(
+            session_id=session_id,
+            turn_id=turn["id"],
+            examiner_text=text,
+            part=part,
+            audio_url=tts_result.get("url"),
+            audio_duration=tts_result.get("duration_sec"),
+        )
+        return turn
+
+    async def _standalone_open(session_id: int) -> None:
+        """Generate and speak the opening question right after the session exists."""
+        try:
+            session = ctx.db.get_session(session_id)
+            plan = ctx.db.get_lesson_plan(session_id)
+            profile = ctx.db.get_profile()
+            result = await ctx.llm.first_turn(plan, profile)
+            accent = profile.get("accent_preference", "uk")
+            await _push_examiner(
+                session_id, result["examiner_text"], session.get("part_mode", "part1"), accent
+            )
+        except Exception:  # noqa: BLE001 - never leave the learner in a dead room
+            logger.exception("standalone 开场失败 session=%s", session_id)
+
+    async def _standalone_after(session_id: int, reply: dict[str, Any]) -> None:
+        """Feedback card + next question, driven by the configured model."""
+        try:
+            session = ctx.db.get_session(session_id)
+            plan = ctx.db.get_lesson_plan(session_id)
+            profile = ctx.db.get_profile()
+            turns = ctx.db.list_turns(session_id)
+            answered = len([t for t in turns if (t.get("learner_transcript") or "").strip()])
+            pronunciation = reply.get("pronunciation") or {}
+            flagged = [
+                word.get("word")
+                for word in (pronunciation.get("words") or [])
+                if word.get("color") in {"red", "amber"}
+            ][:5]
+            brief = {
+                "overall_score": pronunciation.get("overall_score"),
+                "flagged_words": [w for w in flagged if w],
+            }
+            hints = (reply.get("stuck") or {}).get("hint_words") or []
+            result = await ctx.llm.next_turn(
+                plan,
+                str(reply.get("transcript") or ""),
+                reply.get("wpm"),
+                brief,
+                hints,
+                answered,
+                profile.get("feedback_style", "instant_card_plus_voice"),
+            )
+            await _push_examiner(
+                session_id,
+                result["examiner_text"],
+                session.get("part_mode", "part1"),
+                profile.get("accent_preference", "uk"),
+                result.get("feedback_payload"),
+                reply.get("turn_id"),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("standalone 下一轮失败 session=%s", session_id)
+
+    async def _standalone_report(session_id: int) -> None:
+        """Score the lesson and persist the report without the agent."""
+        try:
+            session = ctx.db.get_session(session_id)
+            plan = ctx.db.get_lesson_plan(session_id)
+            turns = ctx.db.list_turns(session_id)
+            context = ctx.db.get_learner_context()
+            result = await ctx.llm.report(session, plan, turns, context)
+            markdown = result.get("report_markdown") or "本课没有产生可评分的回答。"
+            _persist_report(
+                session,
+                markdown,
+                result.get("bands_json") or {},
+                result.get("next_lesson_plan") or "",
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("standalone 报告失败 session=%s", session_id)
+
+    def _persist_report(
+        session: dict[str, Any],
+        markdown: str,
+        bands: dict[str, Any],
+        next_plan: str,
+    ) -> dict[str, Any]:
+        session_id = int(session["id"])
+        ctx.registry.end_lesson(session_id, reason="report_saved")
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", (session.get("topic_title") or "lesson")).strip("-")[:40]
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        md_path = ctx.paths.reports_dir / f"{stamp}-s{session_id}-{slug or 'lesson'}.md"
+        header = (
+            f"# IELTS Speaking Lesson Report\n\n"
+            f"- Session ID: {session_id}\n"
+            f"- Topic: {session.get('topic_title')}\n"
+            f"- Mode: {session.get('part_mode')}\n"
+            f"- Started: {session.get('started_at')}\n\n---\n\n"
+        )
+        md_path.write_text(header + markdown, encoding="utf-8")
+        report = ctx.db.save_lesson_report(
+            session_id=session_id,
+            report_markdown=markdown,
+            report_json={"bands": bands, "next_lesson_plan": next_plan},
+            markdown_file_path=str(md_path),
+            bands=bands,
+            next_lesson_plan=next_plan,
+            summary={"bands": bands},
+        )
+        ctx.registry.push_report(
+            session_id,
+            {
+                "report_id": report.get("id"),
+                "markdown": markdown,
+                "markdown_file_path": str(md_path),
+                "bands": bands,
+            },
+        )
+        return {
+            "ok": True,
+            "report_id": report.get("id"),
+            "markdown_file_path": str(md_path),
+            "report_url": f"/api/sessions/{session_id}/report",
+            "bands": bands,
+        }
+
     @app.post("/api/sessions")
     async def create_session(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
         part_mode = payload.get("part_mode", "part1")
@@ -396,6 +577,13 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         feedback_style = payload.get("feedback_style") or ctx.db.get_profile().get(
             "feedback_style", "instant_card_plus_voice"
         )
+        drive_mode = str(payload.get("drive_mode") or "").strip().lower()
+        if drive_mode not in {"mcp", "standalone"}:
+            # Explicit value wins; otherwise a configured standalone engine drives.
+            drive_mode = "standalone" if ctx.llm.configured() else "mcp"
+        accent = str(payload.get("accent") or "").strip().lower()
+        if accent in {"uk", "us"}:
+            ctx.db.update_profile(accent_preference=accent)
 
         plan: dict[str, Any] | None = None
         topic_title = hint or "Free practice"
@@ -421,16 +609,22 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             topic_title=topic_title,
             feedback_style=feedback_style,
             target_band=payload.get("target_band"),
+            drive_mode=drive_mode,
         )
         if plan:
             ctx.db.save_lesson_plan(session["id"], plan)
         ctx.registry.get(session["id"])
+        if drive_mode == "standalone":
+            asyncio.create_task(_standalone_open(session["id"]))
+        profile = ctx.db.get_profile()
+        profile.update(ctx.llm_store.public_view())
         return {
             "session": session,
             "session_id": session["id"],
             "companion_url": ctx.companion_url(session["id"]),
-            "profile": ctx.db.get_profile(),
+            "profile": profile,
             "plan": plan,
+            "drive_mode": drive_mode,
         }
 
     @app.get("/api/sessions")
@@ -784,6 +978,9 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             }
         )
         ctx.registry.deliver_reply(session_id, payload)
+        if (session.get("drive_mode") or "mcp") == "standalone":
+            # The lesson keeps going without an agent: feedback card, then next question.
+            asyncio.create_task(_standalone_after(session_id, payload))
         return {"status": "processed", **payload}
 
     # ------------------------------------------------------------------ #
@@ -857,6 +1054,61 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         return outcome
 
     # ------------------------------------------------------------------ #
+    # Shadowing: score one sentence against the text the learner MEANT to say
+    # ------------------------------------------------------------------ #
+    @app.post("/api/sessions/{session_id}/practice_sentence")
+    async def practice_sentence(
+        session_id: int,
+        request: Request,
+        file: UploadFile | None = File(default=None),
+        target_text: str = Form(default=""),
+        accent: str = Form(default=""),
+    ) -> dict[str, Any]:
+        """Force-align the recording against target_text (not the ASR guess).
+
+        In free conversation the ASR can "hear" the wrong word and then GOP scores
+        the wrong pronunciation highly. Here the target is known, so a learner who
+        says /sɪŋk/ for "think" gets a low /θ/ score and the right hint.
+
+        Deliberately does not create a turn: shadowing must not skew the lesson
+        report's turn count or fluency stats.
+        """
+        session = ctx.db.get_session(session_id)
+        if not session:
+            raise HTTPException(404, f"session {session_id} 不存在")
+        target = (target_text or "").strip()
+        if not target:
+            raise HTTPException(400, "target_text 不能为空")
+        data = await (file.read() if file is not None else request.body())
+        if not data:
+            raise HTTPException(400, "没有收到音频数据")
+
+        loop = asyncio.get_running_loop()
+
+        def _work() -> dict[str, Any]:
+            accent_used = (accent or ctx.db.get_profile().get("accent_preference") or "uk").strip()
+            info, _ = processor.process_upload(
+                data, ctx.paths.user_audio_dir / f"practice-{session_id}-{uuid.uuid4().hex[:8]}.wav"
+            )
+            prepared = ctx.pron.prepare(info.path)
+            pronunciation = ctx.pron.score_prepared(
+                prepared, target, words=None, accent=accent_used
+            )
+            asr_result = ctx.asr.transcribe(info.path)
+            return {
+                "ok": pronunciation is not None,
+                "target_text": target,
+                "transcript": asr_result.get("text", ""),
+                "language": str(asr_result.get("language") or "en"),
+                "audio_url": "/api/audio/user/" + Path(info.path).name,
+                "duration_sec": info.duration_sec,
+                "pronunciation": pronunciation,
+                "wpm": asr_result.get("wpm"),
+            }
+
+        return await loop.run_in_executor(None, _work)
+
+    # ------------------------------------------------------------------ #
     # Feedback / end / report
     # ------------------------------------------------------------------ #
     @app.post("/api/sessions/{session_id}/feedback")
@@ -872,6 +1124,8 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         if not session:
             raise HTTPException(404, f"session {session_id} 不存在")
         state = ctx.registry.end_lesson(session_id, reason=payload.get("reason", "user_clicked_end"))
+        if (session.get("drive_mode") or "mcp") == "standalone":
+            asyncio.create_task(_standalone_report(session_id))
         return {"status": STATUS_ENDED, "state": state.snapshot(), "session_id": session_id}
 
     @app.post("/api/sessions/{session_id}/report")
@@ -884,45 +1138,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             raise HTTPException(400, "report_markdown 不能为空")
         bands = payload.get("bands_json") or {}
         next_plan = payload.get("next_lesson_plan") or ""
-        ctx.registry.end_lesson(session_id, reason="report_saved")
-
-        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", (session.get("topic_title") or "lesson")).strip("-")[:40]
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        md_path = ctx.paths.reports_dir / f"{stamp}-s{session_id}-{slug or 'lesson'}.md"
-        header = (
-            f"# IELTS Speaking Lesson Report\n\n"
-            f"- Session ID: {session_id}\n"
-            f"- Topic: {session.get('topic_title')}\n"
-            f"- Mode: {session.get('part_mode')}\n"
-            f"- Started: {session.get('started_at')}\n\n---\n\n"
-        )
-        md_path.write_text(header + markdown, encoding="utf-8")
-
-        report = ctx.db.save_lesson_report(
-            session_id=session_id,
-            report_markdown=markdown,
-            report_json={"bands": bands, "next_lesson_plan": next_plan},
-            markdown_file_path=str(md_path),
-            bands=bands,
-            next_lesson_plan=next_plan,
-            summary={"bands": bands},
-        )
-        ctx.registry.push_report(
-            session_id,
-            {
-                "report_id": report.get("id"),
-                "markdown": markdown,
-                "markdown_file_path": str(md_path),
-                "bands": bands,
-            },
-        )
-        return {
-            "ok": True,
-            "report_id": report.get("id"),
-            "markdown_file_path": str(md_path),
-            "report_url": f"/api/sessions/{session_id}/report",
-            "bands": bands,
-        }
+        return _persist_report(session, markdown, bands, next_plan)
 
     @app.get("/api/sessions/{session_id}/report")
     async def get_report(session_id: int) -> dict[str, Any]:
@@ -1028,6 +1244,62 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             return await loop.run_in_executor(None, ctx.tts.synth, text, accent)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(500, f"语音合成失败: {exc}") from exc
+
+    # ------------------------------------------------------------------ #
+    # Model management (bundled models are optional, never forced)
+    # ------------------------------------------------------------------ #
+    @app.get("/api/models/status")
+    async def models_status() -> dict[str, Any]:
+        bundled = bool(os.environ.get("IELTS_COACH_MODELS", "").strip())
+        return {
+            "bundled": bundled,
+            "models_dir": str(ctx.paths.models_dir),
+            "models": {
+                "asr": {
+                    "name": ctx.asr.model_name,
+                    "ready": ctx.asr.is_ready(),
+                    "language": ctx.settings.asr_language,
+                },
+                "tts": {
+                    "name": ctx.settings.tts_engine,
+                    "ready": ctx.tts.resolved_engine in {"edge", "kokoro"},
+                },
+                "pronunciation": {
+                    "name": ctx.settings.pronounce_model,
+                    "ready": ctx.pron.is_ready(),
+                },
+            },
+            "downloads": _MODEL_DOWNLOADS,
+        }
+
+    @app.post("/api/models/download")
+    async def models_download(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """Download a missing model into the user models dir (never into git)."""
+        kind = str(payload.get("kind") or "asr").lower()
+        repos = {
+            "asr": str(payload.get("model") or "Systran/faster-whisper-small"),
+        }
+        if kind not in repos:
+            raise HTTPException(400, "kind 只支持 asr（语音模型）")
+        repo_id = repos[kind]
+        current = _MODEL_DOWNLOADS.get(kind)
+        if current and current.get("state") == "running":
+            return {"ok": True, "already_running": True, **current}
+        target = ctx.paths.models_dir
+        job = {"state": "running", "repo": repo_id, "started_at": time.time()}
+        _MODEL_DOWNLOADS[kind] = job
+
+        def _download() -> None:
+            try:
+                from huggingface_hub import snapshot_download
+
+                path = snapshot_download(repo_id, cache_dir=str(target))
+                job.update({"state": "done", "path": path, "finished_at": time.time()})
+            except Exception as exc:  # noqa: BLE001
+                job.update({"state": "error", "error": str(exc), "finished_at": time.time()})
+
+        asyncio.get_running_loop().run_in_executor(None, _download)
+        return {"ok": True, "started": True, **job}
 
     @app.get("/api/audio/tts/{filename}")
     async def serve_tts(filename: str) -> FileResponse:

@@ -240,6 +240,10 @@ class ASRService:
         self._load_error = str(last_error)
         raise RuntimeError(f"Faster-Whisper 模型加载失败: {last_error}")
 
+    def is_ready(self) -> bool:
+        """True once the model is resident (no loading attempt triggered)."""
+        return self._model is not None
+
     def warmup(self) -> dict[str, Any]:
         try:
             self.load()

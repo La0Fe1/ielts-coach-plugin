@@ -52,27 +52,63 @@ def _wav_duration(path: Path) -> float:
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s*")
 
 
-def split_bilingual(text: str) -> list[tuple[str, str]]:
-    """Split text into (lang, chunk) runs, deciding language per sentence.
+#: A run of English words inside a Chinese sentence ("think", "slow pace").
+EN_PHRASE_RE = re.compile(r"[A-Za-z][A-Za-z'\- ]*[A-Za-z]")
 
-    Splitting on every script change fragments technical terms out of Chinese
-    sentences ("注意 think 的 θ 音" would become 5 network calls). Deciding per
-    sentence and letting the Chinese voice pronounce embedded English words is both
-    faster and closer to how bilingual teachers actually speak.
+
+def _split_embedded_english(sentence: str) -> list[tuple[str, str]]:
+    """Pull English phrases out of a Chinese sentence so they get an English voice.
+
+    Without this, "注意 think 的 θ 音" is read entirely by the Mandarin voice and
+    "think" comes out with a Chinese accent - exactly the word being taught.
+    """
+    parts: list[tuple[str, str]] = []
+    cursor = 0
+    for match in EN_PHRASE_RE.finditer(sentence):
+        phrase = match.group(0).strip()
+        if len(re.sub(r"[^A-Za-z]", "", phrase)) < 2:
+            continue
+        before = sentence[cursor:match.start()]
+        if before.strip():
+            parts.append(("zh", before))
+        parts.append(("en", phrase))
+        cursor = match.end()
+    tail = sentence[cursor:]
+    if tail.strip():
+        parts.append(("zh", tail))
+    return parts
+
+
+def split_bilingual(text: str) -> list[tuple[str, str]]:
+    """Split text into (lang, chunk) runs.
+
+    Language is decided per sentence; inside a Chinese sentence, embedded English
+    phrases are handed to the English voice so taught words are pronounced properly.
     """
     sentences = [part for part in SENTENCE_SPLIT_RE.split(text or "") if part and part.strip()]
     if not sentences:
         return []
+
     runs: list[tuple[str, str]] = []
+
+    def push(lang: str, chunk: str) -> None:
+        clean = chunk.strip()
+        if not clean:
+            return
+        if runs and runs[-1][0] == lang:
+            runs[-1] = (lang, runs[-1][1] + " " + clean)
+        else:
+            runs.append((lang, clean))
+
     for sentence in sentences:
         stripped = re.sub(r"\s", "", sentence)
         cjk = len(CJK_RE.findall(sentence))
         ratio = cjk / max(1, len(stripped))
-        lang = "zh" if ratio >= 0.25 else "en"
-        if runs and runs[-1][0] == lang:
-            runs[-1] = (lang, runs[-1][1] + " " + sentence.strip())
+        if ratio >= 0.25:
+            for lang, chunk in _split_embedded_english(sentence):
+                push(lang, chunk)
         else:
-            runs.append((lang, sentence.strip()))
+            push("en", sentence)
     return runs
 
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from daemon.completeness import analyze, is_stop_command
 
 
@@ -20,5 +18,5 @@ def test_chinese_stop_phrases():
 
 
 def test_english_rules_untouched_when_language_is_en():
-    assert analyze("I live near the", language="en")["complete"] is False
-    assert analyze("I live near the coast.", language="en")["complete"] is True
+    assert analyze("I live near the", language="en", pause_sec=3.0)["complete"] is False
+    assert analyze("I live near the coast.", language="en", pause_sec=3.0)["complete"] is True

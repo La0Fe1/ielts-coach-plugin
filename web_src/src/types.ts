@@ -1,6 +1,10 @@
 export type FeedbackStyle = 'instant_card_plus_voice' | 'instant_card_only'
 export type Accent = 'uk' | 'us'
-export type MicMode = 'auto' | 'manual'
+export type PartMode = 'part1' | 'part2' | 'part3' | 'full_mock' | 'free_drill'
+export type MicMode = 'free' | 'manual'
+export type DriveMode = 'standalone' | 'mcp'
+export type ThemeName = 'light' | 'dark'
+export type Part2Stage = 'idle' | 'prep' | 'speak'
 export type Phase = 'gate' | 'idle' | 'examiner_speaking' | 'listening' | 'submitting' | 'thinking' | 'ended'
 
 export interface Profile {
@@ -10,16 +14,24 @@ export interface Profile {
   accent_preference: Accent
   feedback_style?: FeedbackStyle
   native_language?: string
+  voice_speed?: number
+  llm_mode?: DriveMode
+  llm_provider?: string
+  llm_base_url?: string
+  llm_model?: string
+  has_api_key?: boolean
+  api_key_masked?: string
 }
 
 export interface Session {
   id: number
-  part_mode: 'part1' | 'part2' | 'part3' | 'full_mock' | 'free_drill'
+  part_mode: PartMode
   topic_title: string
   feedback_style: FeedbackStyle
   status: 'active' | 'completed' | 'abandoned'
   started_at: string
   ended_at?: string | null
+  target_band?: number | null
   estimated_band_overall?: number | null
   band_fc?: number | null
   band_lr?: number | null
@@ -167,6 +179,16 @@ export interface MemoryNote {
   last_seen_at?: string
 }
 
+export interface BandHistoryItem {
+  session_id: number
+  estimated_band_overall: number
+  band_fc?: number | null
+  band_lr?: number | null
+  band_gra?: number | null
+  band_pr?: number | null
+  created_at?: string
+}
+
 export interface LearnerContext {
   profile: Profile
   top_grammar_weaknesses: { error_pattern: string; error_category: string; count: number; explanation?: string }[]
@@ -174,7 +196,7 @@ export interface LearnerContext {
   part2_stories: MemoryNote[]
   personal_facts: MemoryNote[]
   last_lesson_plan: MemoryNote | null
-  band_history: { session_id: number; estimated_band_overall: number }[]
+  band_history: BandHistoryItem[]
   has_history: boolean
 }
 
@@ -245,7 +267,65 @@ export interface TurnReply {
   pauses?: PauseInfo[]
   pronunciation?: PronunciationResult | null
   stuck?: StuckInfo | null
+  language?: string
+  intent?: string
   [key: string]: unknown
+}
+
+export interface CreateSessionInput {
+  part_mode: PartMode
+  topic_hint?: string
+  feedback_style?: FeedbackStyle
+  target_band?: number
+  accent?: Accent
+  auto_plan: true
+  drive_mode?: DriveMode
+}
+
+export interface CreateSessionResult {
+  session: Session
+  session_id: number
+  companion_url: string
+  plan: LessonPlan | null
+  drive_mode?: DriveMode
+}
+
+export interface LlmTestInput {
+  llm_provider?: string
+  llm_base_url?: string
+  llm_model?: string
+  llm_api_key?: string
+}
+
+export interface LlmTestResult {
+  ok: boolean
+  message: string
+  latency_ms?: number
+}
+
+export interface PracticeResult {
+  ok: boolean
+  target_text: string
+  transcript: string
+  audio_url: string
+  pronunciation: PronunciationResult | null
+  wpm: number | null
+}
+
+export interface PracticeState {
+  targetText: string | null
+  status: 'idle' | 'recording' | 'uploading'
+  elapsed: number
+  previousScore?: number | null
+  result: PracticeResult | null
+  error: string | null
+}
+
+export interface SendProgress {
+  active: boolean
+  progress: number
+  remainingSec: number
+  thresholdSec: number
 }
 
 export interface VadEvent {
@@ -263,6 +343,7 @@ export interface VadEvent {
   fallback?: string | null
   frame_samples?: number
   silence_sec?: number
+  cut_on_silence?: boolean
   stuck?: boolean
 }
 

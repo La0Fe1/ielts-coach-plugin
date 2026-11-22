@@ -91,6 +91,10 @@ class PronunciationService:
         self.last_elapsed_sec: float | None = None
 
     # -- lifecycle -----------------------------------------------------------
+    def is_ready(self) -> bool:
+        """True once the acoustic model is resident (never triggers a load)."""
+        return self._model is not None
+
     @property
     def device(self) -> str:
         # A quantized checkpoint can only run on CPU; the loader pins this flag.
@@ -776,6 +780,9 @@ class _StubPronunciation:
     def __init__(self, settings: config.Settings):
         self.settings = settings
 
+    def is_ready(self) -> bool:
+        return True
+
     def warmup(self) -> dict[str, Any]:
         return {"ok": True, "stub": True}
 
@@ -785,7 +792,7 @@ class _StubPronunciation:
     def prepare(self, wav_path: str | Path) -> dict[str, Any] | None:
         return {"log_probs": None, "frames": 100, "duration_sec": 2.0, "forward_sec": 0.01}
 
-    def score_prepared(self, prepared, transcript: str, words=None):
+    def score_prepared(self, prepared, transcript: str, words=None, accent: str | None = None):
         tokens = re.findall(r"[A-Za-z][A-Za-z'\-]*", transcript or "")
         if not tokens:
             return None
