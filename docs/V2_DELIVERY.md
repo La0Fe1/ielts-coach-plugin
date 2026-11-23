@@ -417,3 +417,10 @@ v2.2.3 修复了 Edge TTS 429 限流的根因后，用户仍反馈「还是没�
 | 生产构建 | `npm run build` → exit 0（`web/dist/sound-check.html` 已生成） |
 | 自检页 | 真实服务下 `GET /sound-check.html` 200；无头 Edge 实测真实页面音频链路全绿 |
 | 真实用户设备 | **待用户点自检页确认**（系统音量 / 输出设备 / 标签页静音无法从服务端判断） |
+---
+
+## 封版状态（2026-11-23）
+
+**v2.2.4 已封版**：`main` 最新提交即封版提交，封版标记 tag 为 `freeze-2026-11-23`；
+GitHub Release：https://github.com/La0Fe1/ielts-coach-plugin/releases/tag/v2.2.4 。
+本文件记录的是封版前 lead 的最终复跑结果；未实测项均已在各版本文档中如实标注。

@@ -19,6 +19,25 @@ OpenAI Codex CLI / Claude Code / Cursor，通过 **MCP + Skill**）：
 
 ---
 
+## 📌 版本状态：已封版（v2.2.4，2026-11-23）
+
+本项目**暂时封版**：`main` 最新版本为 **v2.2.4**，封版前的全部代码、测试与文档均已提交并推送到 GitHub；
+封版后不再自动迭代。
+
+- 发布页：https://github.com/La0Fe1/ielts-coach-plugin/releases/tag/v2.2.4
+- 封版标记 tag：`freeze-2026-11-23`
+- 完整验收记录：[docs/V2_DELIVERY.md](docs/V2_DELIVERY.md) · 逐版本变更：[docs/RELEASE_NOTES_v2.2.4.md](docs/RELEASE_NOTES_v2.2.4.md)
+
+**封版验收**：`npm run typecheck` / `npm run build` / `npm test` 全绿（9 个测试文件 / 93 项），
+真实进程 E2E、真实微软 Edge TTS、无头浏览器音频链路均已实测通过。
+**未实测（如实标注）**：真实百炼 / Gemini / OpenAI / DeepSeek Key 的实际通话质量、真机 iPhone / Android、
+`docker build` 与云平台部署。
+
+**如需恢复开发**：删除本节并提升版本号（4 个 `package.json` + `package-lock.json` 的 workspace version），
+其余开发与升级流程见文末「开发」一节。
+
+---
+
 ## 一、5 分钟快速开始（本地）
 
 前置：安装 [Node.js LTS](https://nodejs.org/zh-cn)（**20 以上**），然后在仓库根目录：
