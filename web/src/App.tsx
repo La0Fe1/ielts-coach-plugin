@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildExaminerSystemPrompt,
   planLesson,
+  type ClientEvent,
   type LessonPlan,
   type LessonRecord,
   type LessonReport,
@@ -15,6 +16,7 @@ import {
 import { startCapture, type CaptureHandle } from './audio/capture';
 import { PcmPlayer } from './audio/player';
 import { RealtimeClient } from './realtime/client';
+import { DeepSeekVoiceSession, SPEECH_UNSUPPORTED_NOTICE } from './realtime/deepseekSession';
 import { DraftCaption } from './realtime/speechFallback';
 import {
   deleteMemoryNote,
@@ -101,8 +103,15 @@ export default function App() {
   const [reportLoading, setReportLoading] = useState(false);
   const [coachLesson, setCoachLesson] = useState<LessonRecord | null>(null);
   const [externalPrompt, setExternalPrompt] = useState<string | null>(null);
+  /** DeepSeek 纯语音：识别语言可随时切换（en / zh）。 */
+  const [recognitionLanguage, setRecognitionLanguage] = useState<'en' | 'zh'>('en');
+  /** 非阻塞友好提示（SpeechRecognition 不可用 / 网络受限 / 权限被拒）。 */
+  const [deepseekNotice, setDeepseekNotice] = useState<string | null>(null);
+  /** 「获取 API Key」按钮：打开设置并自动展开获取指南。 */
+  const [guideRequested, setGuideRequested] = useState(false);
 
   const clientRef = useRef<RealtimeClient | null>(null);
+  const deepseekRef = useRef<DeepSeekVoiceSession | null>(null);
   const captureRef = useRef<CaptureHandle | null>(null);
   const playerRef = useRef<PcmPlayer | null>(null);
   const draftCaptionRef = useRef<DraftCaption | null>(null);
@@ -151,15 +160,28 @@ export default function App() {
 
   const handsFree = settings.turnMode === 'auto';
   const externalMode = (settings.reviewMode || 'auto') === 'external';
+  const isDeepSeek = settings.provider === 'deepseek';
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   }, [settings]);
 
+  /**
+   * Headers for every browser↔server lesson/memory call. In MULTI_USER_MODE
+   * deployments the entered access code must be sent as a Bearer token,
+   * otherwise history/memory sync is rejected with 401. Never send the raw
+   * provider API key here — only the shared access code.
+   */
+  const syncHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (settingsRef.current.accessCode) headers.Authorization = 'Bearer ' + settingsRef.current.accessCode;
+    return headers;
+  }, []);
+
   const refreshMemory = useCallback(async () => {
     const [local, remote] = await Promise.all([
       listMemory().catch(() => [] as MemoryNote[]),
-      fetch('/api/memory')
+      fetch('/api/memory', { headers: syncHeaders() })
         .then((response) => (response.ok ? response.json() : null))
         .then((data: { memory?: MemoryNote[] } | null) => data?.memory || [])
         .catch(() => [] as MemoryNote[]),
@@ -171,13 +193,13 @@ export default function App() {
     merged.sort((a, b) => b.createdAt - a.createdAt);
     memoryRef.current = merged;
     setMemory(merged);
-  }, []);
+  }, [syncHeaders]);
 
   const refreshLocal = useCallback(() => {
     listLessons()
       .then((items) => {
         setHistory(items);
-        return fetch('/api/lessons?limit=20')
+        return fetch('/api/lessons?limit=20', { headers: syncHeaders() })
           .then((response) => (response.ok ? response.json() : null))
           .then((data: { lessons?: LessonRecord[] } | null) => {
             const merged = new Map<string, LessonRecord>(items.map((item) => [item.id, item]));
@@ -192,6 +214,7 @@ export default function App() {
               const preferServer =
                 (lesson.report && !local.report) ||
                 (lesson.lines?.length || 0) > (local.lines?.length || 0) ||
+                Object.keys(lesson.feedback || {}).length > Object.keys(local.feedback || {}).length ||
                 (lesson.status === 'completed' && local.status !== 'completed');
               if (preferServer) {
                 merged.set(lesson.id, {
@@ -207,14 +230,14 @@ export default function App() {
       })
       .catch(() => undefined);
     void refreshMemory();
-  }, [refreshMemory]);
+  }, [refreshMemory, syncHeaders]);
 
   /** ?lesson=<id>: an AI client planned this lesson and handed the browser a deep link. */
   useEffect(() => {
     const lessonParam = new URLSearchParams(location.search).get('lesson');
     if (!lessonParam) return;
     let cancelled = false;
-    fetch('/api/lessons/' + encodeURIComponent(lessonParam))
+    fetch('/api/lessons/' + encodeURIComponent(lessonParam), { headers: syncHeaders() })
       .then((response) => (response.ok ? response.json() : null))
       .then((data: { lesson?: LessonRecord } | null) => {
         const lesson = data?.lesson;
@@ -239,7 +262,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [syncHeaders]);
 
   useEffect(() => {
     fetch('/api/config/public')
@@ -296,7 +319,7 @@ export default function App() {
       const timer = window.setTimeout(() => controller.abort(), 8000);
       void fetch('/api/lessons/' + encodeURIComponent(record.id) + '/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: syncHeaders(),
         body: JSON.stringify(record),
         signal: controller.signal,
       })
@@ -304,7 +327,7 @@ export default function App() {
         .catch(() => undefined)
         .finally(() => window.clearTimeout(timer));
     },
-    [buildLessonRecord],
+    [buildLessonRecord, syncHeaders],
   );
 
   const wsUrl = useMemo(() => {
@@ -328,6 +351,26 @@ export default function App() {
   const pushLine = useCallback((line: TranscriptLine) => {
     linesRef.current = [...linesRef.current, line];
     setLines(linesRef.current);
+  }, []);
+
+  /** 控制面事件（提交 / 打断 / 切模式 / 开场 / 挂断）：deepseek 走浏览器控制器，其余走 WebSocket。 */
+  const sendControl = useCallback((event: ClientEvent) => {
+    const deepseek = deepseekRef.current;
+    if (deepseek) {
+      deepseek.send(event);
+      return;
+    }
+    clientRef.current?.send(event);
+  }, []);
+
+  /** 麦克风开关：deepseek 暂停/恢复浏览器识别，其余模式静音 PCM 采集。 */
+  const setMicMuted = useCallback((mutedNow: boolean) => {
+    const deepseek = deepseekRef.current;
+    if (deepseek) {
+      deepseek.setMuted(mutedNow);
+      return;
+    }
+    captureRef.current?.setMuted(mutedNow);
   }, []);
 
   const analyzeTurn = useCallback(
@@ -378,13 +421,20 @@ export default function App() {
     }
     pendingUnmuteRef.current = true;
     const player = playerRef.current;
-    if (!player) return;
+    if (!player) {
+      // DeepSeek 纯语音没有 PCM 尾巴：控制器自己的 TTS 已经播完，直接恢复识别。
+      if (deepseekRef.current) {
+        pendingUnmuteRef.current = false;
+        if (!cueLockRef.current) setMicMuted(false);
+      }
+      return;
+    }
     player.onIdle = () => {
       if (!pendingUnmuteRef.current) return;
       pendingUnmuteRef.current = false;
-      if (!cueLockRef.current) captureRef.current?.setMuted(false);
+      if (!cueLockRef.current) setMicMuted(false);
     };
-  }, []);
+  }, [setMicMuted]);
 
   const startSpeakCountdown = useCallback(() => {
     if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
@@ -404,8 +454,8 @@ export default function App() {
     (text: string) => {
       cueLockRef.current = true;
       setCue({ text, stage: 'prep', remaining: 60 });
-      captureRef.current?.setMuted(true);
-      clientRef.current?.send({ type: 'update_turn_mode', turnMode: 'manual' });
+      setMicMuted(true);
+      sendControl({ type: 'update_turn_mode', turnMode: 'manual' });
       if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
       let remaining = 60;
       cueTimerRef.current = window.setInterval(() => {
@@ -418,34 +468,34 @@ export default function App() {
         cueTimerRef.current = null;
         cueLockRef.current = false;
         setCue((current) => (current ? { ...current, stage: 'speak', remaining: 120 } : current));
-        captureRef.current?.setMuted(false);
+        setMicMuted(false);
         startSpeakCountdown();
       }, 1000);
     },
-    [startSpeakCountdown],
+    [sendControl, setMicMuted, startSpeakCountdown],
   );
 
   const startCueSpeaking = useCallback(() => {
     cueLockRef.current = false;
     setCue((current) => (current ? { ...current, stage: 'speak', remaining: 120 } : current));
-    captureRef.current?.setMuted(false);
-    clientRef.current?.send({ type: 'update_turn_mode', turnMode: 'manual' });
+    setMicMuted(false);
+    sendControl({ type: 'update_turn_mode', turnMode: 'manual' });
     startSpeakCountdown();
-  }, [startSpeakCountdown]);
+  }, [sendControl, setMicMuted, startSpeakCountdown]);
 
   const finishCue = useCallback(() => {
     if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
     cueTimerRef.current = null;
     cueLockRef.current = false;
-    clientRef.current?.send({ type: 'commit_turn' });
+    sendControl({ type: 'commit_turn' });
     // Restore whatever turn-taking mode the learner configured before the cue.
-    clientRef.current?.send({
+    sendControl({
       type: 'update_turn_mode',
       turnMode: settingsRef.current.turnMode === 'manual' ? 'manual' : 'auto',
     });
-    captureRef.current?.setMuted(false);
+    setMicMuted(false);
     setCue(null);
-  }, []);
+  }, [sendControl, setMicMuted]);
 
   const handleServerEvent = useCallback(
     (event: ServerEvent) => {
@@ -457,7 +507,7 @@ export default function App() {
           if (first?.kind === 'cue_card') {
             beginCue(first.text);
           } else {
-            clientRef.current?.send({
+            sendControl({
               type: 'trigger_greeting',
               text: 'Begin the lesson now: greet the learner in one short English sentence, then ask question 1 exactly as written.',
             });
@@ -468,7 +518,7 @@ export default function App() {
       if (event.type === 'user_speech_started') {
         playerRef.current?.flush();
         setOrb('listening');
-        if (speakerModeRef.current && !cueLockRef.current) captureRef.current?.setMuted(false);
+        if (speakerModeRef.current && !cueLockRef.current) setMicMuted(false);
         pendingUnmuteRef.current = false;
         // Draft captions only if the server stays silent for 1.2 s.
         if (draftCaptionRef.current && draftTimerRef.current === null) {
@@ -517,7 +567,7 @@ export default function App() {
       }
       if (event.type === 'examiner_transcript_delta') {
         setOrb('speaking');
-        if (speakerModeRef.current && !cueLockRef.current) captureRef.current?.setMuted(true);
+        if (speakerModeRef.current && !cueLockRef.current) setMicMuted(true);
         setDraftExaminer((current) => current + event.delta);
         return;
       }
@@ -543,22 +593,34 @@ export default function App() {
         return;
       }
       if (event.type === 'error') {
+        if (event.code.startsWith('speech_')) {
+          // 浏览器识别不可用/被拒：只给友好提示 + 打字备用，不弹阻塞式错误框。
+          setDeepseekNotice(event.message);
+          setBusy(false);
+          setOrb('idle');
+          return;
+        }
         setError(event.message);
         setBusy(false);
         setOrb('idle');
       }
     },
-    [analyzeTurn, beginCue, persistLesson, pushLine, releaseMicAfterTail],
+    [analyzeTurn, beginCue, persistLesson, pushLine, releaseMicAfterTail, sendControl, setMicMuted],
   );
 
   const start = useCallback(async () => {
     const current = settingsRef.current;
-    const hasCredentials = Boolean(current.apiKey || current.accessCode || config?.serverProviders[current.provider]);
+    const deepseekMode = current.provider === 'deepseek';
+    // DeepSeek 纯语音：自己的 Key，或「服务端已配置 DEEPSEEK_API_KEY + 访问口令」。
+    const hasCredentials = deepseekMode
+      ? Boolean(current.apiKey || (config?.serverProviders.deepseek && current.accessCode))
+      : Boolean(current.apiKey || current.accessCode || config?.serverProviders[current.provider]);
     if (!hasCredentials) {
       setSettingsOpen(true);
       return;
     }
     setError(null);
+    setDeepseekNotice(null);
     setBusy(true);
     setFeedbackMap({});
     feedbackMapRef.current = {};
@@ -600,6 +662,39 @@ export default function App() {
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const context = new Context();
       await context.resume();
+
+      if (deepseekMode) {
+        // DeepSeek 纯语音：浏览器识别负责听、服务端 SSE + Edge TTS 负责说，
+        // 不需要采集 PCM，也绝不创建 PcmPlayer / RealtimeClient。
+        draftCaptionRef.current?.stop();
+        draftCaptionRef.current = null;
+        const session = new DeepSeekVoiceSession({
+          accent: current.voiceAccent === 'us' ? 'us' : 'uk',
+          turnMode: current.turnMode,
+          language: recognitionLanguage,
+          systemPrompt: buildExaminerSystemPrompt({ plan, style: current.style, memory: recentMemory }),
+          model: current.model || 'deepseek-chat',
+          apiKey: current.apiKey,
+          accessCode: current.accessCode,
+          endpointUrl: current.endpointUrl,
+          audioContext: context,
+        });
+        deepseekRef.current = session;
+        session.onEvent = handleServerEvent;
+        session.onClose = (reason) => {
+          if (stageRef.current === 'live') setError('连接已断开：' + reason);
+        };
+        if (planPartMode === 'part2' || plan.questions[0]?.kind === 'cue_card') session.setMuted(true);
+        await session.connect();
+        session.send({ type: 'update_turn_mode', turnMode: current.turnMode });
+        if (!session.supported) setDeepseekNotice(SPEECH_UNSUPPORTED_NOTICE);
+        deepLinkRef.current = null;
+        setStage('live');
+        setOrb('idle');
+        setBusy(false);
+        return;
+      }
+
       const player = new PcmPlayer(24000, context);
       playerRef.current = player;
       const capture = await startCapture({
@@ -638,12 +733,14 @@ export default function App() {
     } catch (startError) {
       setBusy(false);
       setError('无法开始：' + String((startError as Error).message || startError));
+      deepseekRef.current?.close();
+      deepseekRef.current = null;
       captureRef.current?.stop();
       captureRef.current = null;
       clientRef.current?.close();
       clientRef.current = null;
     }
-  }, [config, handleServerEvent, persistLesson, wsUrl]);
+  }, [config, handleServerEvent, persistLesson, recognitionLanguage, wsUrl]);
 
   const clearCoachLink = useCallback(() => {
     deepLinkRef.current = null;
@@ -661,13 +758,21 @@ export default function App() {
       lessonEndedAtRef.current = endedAt;
       persistLesson({ endedAt, status: 'live' });
     }
+    deepseekRef.current?.close();
+    deepseekRef.current = null;
     clientRef.current?.send({ type: 'end_session' });
     clientRef.current?.close();
     clientRef.current = null;
     captureRef.current?.stop();
     captureRef.current = null;
     playerRef.current?.flush();
+    playerRef.current = null;
+    if (draftTimerRef.current !== null) {
+      window.clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
     draftCaptionRef.current?.stop();
+    draftCaptionRef.current = null;
     setCue(null);
     setDraftUser('');
     setDraftExaminer('');
@@ -699,13 +804,21 @@ export default function App() {
     if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
     cueTimerRef.current = null;
     cueLockRef.current = false;
+    deepseekRef.current?.close();
+    deepseekRef.current = null;
     clientRef.current?.send({ type: 'end_session' });
     clientRef.current?.close();
     clientRef.current = null;
     captureRef.current?.stop();
     captureRef.current = null;
     playerRef.current?.flush();
+    playerRef.current = null;
+    if (draftTimerRef.current !== null) {
+      window.clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
     draftCaptionRef.current?.stop();
+    draftCaptionRef.current = null;
     setCue(null);
     setDraftUser('');
     setDraftExaminer('');
@@ -759,7 +872,7 @@ export default function App() {
         await saveMemory(data.report.memory_updates);
         void fetch('/api/memory', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: syncHeaders(),
           body: JSON.stringify({ items: data.report.memory_updates }),
         }).catch(() => undefined);
       }
@@ -770,7 +883,7 @@ export default function App() {
     } finally {
       setReportLoading(false);
     }
-  }, [coachPayload, externalMode, persistLesson, refreshLocal]);
+  }, [coachPayload, externalMode, persistLesson, refreshLocal, syncHeaders]);
 
   const downloadReport = useCallback(() => {
     if (!report) return;
@@ -804,27 +917,27 @@ export default function App() {
 
   const toggleMute = useCallback(() => {
     setMuted((current) => {
-      captureRef.current?.setMuted(!current);
+      setMicMuted(!current);
       return !current;
     });
-  }, []);
+  }, [setMicMuted]);
 
   const toggleHandsFree = useCallback(() => {
     setSettings((current) => {
       const next = { ...current, turnMode: current.turnMode === 'auto' ? ('manual' as const) : ('auto' as const) };
-      clientRef.current?.send({ type: 'update_turn_mode', turnMode: next.turnMode });
+      sendControl({ type: 'update_turn_mode', turnMode: next.turnMode });
       return next;
     });
-  }, []);
+  }, [sendControl]);
 
   const commitTurn = useCallback(() => {
     if (settingsRef.current.turnMode === 'auto') {
-      clientRef.current?.send({ type: 'interrupt' });
+      sendControl({ type: 'interrupt' });
       playerRef.current?.flush();
     } else {
-      clientRef.current?.send({ type: 'commit_turn' });
+      sendControl({ type: 'commit_turn' });
     }
-  }, []);
+  }, [sendControl]);
 
   const feedbackIds = useMemo(() => {
     const map: Record<string, boolean> = {};
@@ -855,10 +968,13 @@ export default function App() {
       memoryRef.current = nextLocal;
       setMemory(nextLocal);
       await deleteMemoryNote(note.id).catch(() => undefined);
-      await fetch('/api/memory/' + encodeURIComponent(note.id), { method: 'DELETE' }).catch(() => undefined);
+      await fetch('/api/memory/' + encodeURIComponent(note.id), {
+        method: 'DELETE',
+        headers: syncHeaders(),
+      }).catch(() => undefined);
       await refreshMemory();
     },
-    [refreshMemory],
+    [refreshMemory, syncHeaders],
   );
 
   const exportData = useCallback(async () => {
@@ -921,6 +1037,10 @@ export default function App() {
           ready={Boolean(settings.apiKey || settings.accessCode || config?.serverProviders[settings.provider])}
           historyCount={history.length}
           coachBanner={coachBanner}
+          onOpenKeyGuide={() => {
+            setSettingsOpen(true);
+            setGuideRequested(true);
+          }}
         />
       )}
 
@@ -946,7 +1066,7 @@ export default function App() {
           onToggleCaptions={() => setCaptionsVisible((current) => !current)}
           onCommit={commitTurn}
           onInterrupt={() => {
-            clientRef.current?.send({ type: 'interrupt' });
+            sendControl({ type: 'interrupt' });
             playerRef.current?.flush();
           }}
           onEnd={() => void endLesson()}
@@ -959,6 +1079,15 @@ export default function App() {
           mobileSide={mobileSide}
           onToggleMobileSide={() => setMobileSide((current) => !current)}
           coachBanner={liveBanner}
+          typingEnabled={isDeepSeek}
+          onTypingSubmit={(text) => deepseekRef.current?.submitTypedText(text)}
+          recognitionLanguage={isDeepSeek ? recognitionLanguage : undefined}
+          onToggleRecognitionLanguage={() => {
+            const next = recognitionLanguage === 'en' ? 'zh' : 'en';
+            setRecognitionLanguage(next);
+            deepseekRef.current?.setLanguage(next);
+          }}
+          notice={deepseekNotice}
         />
       )}
 
@@ -986,6 +1115,8 @@ export default function App() {
           setSettings(next);
           setSettingsOpen(false);
         }}
+        guideRequested={guideRequested}
+        onGuideShown={() => setGuideRequested(false)}
       />
 
       <HistorySheet
@@ -1045,6 +1176,7 @@ export default function App() {
 }
 
 function providerName(provider: RealtimeSettings['provider']): string {
+  if (provider === 'deepseek') return 'DeepSeek 纯语音';
   if (provider === 'qwen') return '百炼通义';
   if (provider === 'gemini') return 'Gemini';
   return 'OpenAI';

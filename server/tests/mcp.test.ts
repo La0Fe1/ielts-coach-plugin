@@ -252,7 +252,7 @@ describe('MCP over Streamable HTTP', () => {
     await response.body?.cancel().catch(() => undefined);
   });
 
-  it('keeps /health and /api/status public and reports v2.1.0', async () => {
+  it('keeps /health and /api/status public and reports v2.2.0', async () => {
     tempDataDir();
     const gateway = await startGateway();
     cleanups.push(gateway.close);
@@ -262,11 +262,50 @@ describe('MCP over Streamable HTTP', () => {
       expect(response.status).toBe(200);
       const data = (await response.json()) as Record<string, unknown>;
       expect(data.ok).toBe(true);
-      expect(data.version).toBe('2.1.0');
+      expect(data.version).toBe('2.2.0');
       expect(typeof data.hasMcpToken).toBe('boolean');
       expect(typeof data.port).toBe('number');
       expect(typeof data.uptime).toBe('number');
     }
+  });
+
+  it('accepts extra outer item fields in save_turn_feedback (external LLM write-back)', async () => {
+    tempDataDir();
+    const gateway = await startGateway();
+    cleanups.push(gateway.close);
+    const client = await connectClient(gateway.httpUrl + '/mcp');
+
+    const created = textOf(await client.callTool({ name: 'create_lesson', arguments: { openBrowser: false } }));
+    const saved = textOf(
+      await client.callTool({
+        name: 'save_turn_feedback',
+        arguments: {
+          lessonId: created.lessonId,
+          items: [
+            {
+              lineId: 'line-extra',
+              // 豆包 / Codex / dsh often add outer fields such as turnIndex;
+              // these must be stripped, never reject the whole write-back.
+              turnIndex: 2,
+              note: 'extra field from an external agent',
+              feedback: {
+                corrected_text: 'I went there.',
+                upgraded_text: 'I paid a visit there.',
+                grammar_mistakes: [],
+                lexical_tips: [],
+              },
+            },
+          ],
+        },
+      }),
+    );
+    expect(saved.saved).toBe(1);
+
+    const transcript = textOf(
+      await client.callTool({ name: 'get_lesson_transcript', arguments: { lessonId: created.lessonId } }),
+    );
+    const feedback = transcript.feedback as Record<string, { corrected_text?: string }>;
+    expect(feedback['line-extra']?.corrected_text).toBe('I went there.');
   });
 });
 

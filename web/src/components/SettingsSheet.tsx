@@ -1,7 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PublicConfig, RealtimeSettings, ReviewMode } from '@ielts/shared';
 
+type VoiceAccent = NonNullable<RealtimeSettings['voiceAccent']>;
+
 const PROVIDERS: Array<{ id: RealtimeSettings['provider']; label: string; models: string[] }> = [
+  {
+    // v2.2.0 pure-voice mode: browser SpeechRecognition + Edge TTS, one DeepSeek key.
+    id: 'deepseek',
+    label: 'DeepSeek 纯语音（仅需 DeepSeek Key）',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+  },
   {
     id: 'qwen',
     label: '阿里云百炼（国内）',
@@ -9,6 +17,40 @@ const PROVIDERS: Array<{ id: RealtimeSettings['provider']; label: string; models
   },
   { id: 'gemini', label: 'Google Gemini（海外）', models: ['gemini-2.5-flash-native-audio', 'gemini-3.8-live'] },
   { id: 'openai', label: 'OpenAI / 中转', models: ['gpt-realtime', 'gpt-realtime-mini', 'gpt-4o-realtime-preview'] },
+];
+
+/** DeepSeek pure-voice examiner voices (Edge Neural TTS). */
+const VOICE_ACCENTS: Array<{ id: VoiceAccent; label: string }> = [
+  { id: 'uk', label: '英音考官 Sonia' },
+  { id: 'us', label: '美音考官 Jenny' },
+];
+
+/** Official "where do I get a key" links, shown in the collapsible guide card. */
+const KEY_GUIDES: Array<{ title: string; url: string; linkText: string; note: string }> = [
+  {
+    title: 'DeepSeek（单 Key 通吃，最省心）',
+    url: 'https://platform.deepseek.com/api_keys',
+    linkText: 'platform.deepseek.com/api_keys',
+    note: '创建 Key 后选「DeepSeek 纯语音」即可语音 + 实时字幕 + 精批。',
+  },
+  {
+    title: '阿里云百炼 Qwen-Omni（国内直连 · 端到端低延迟）',
+    url: 'https://bailian.console.aliyun.com/',
+    linkText: 'bailian.console.aliyun.com',
+    note: '实名后通常有免费 Token 额度（华北2 北京地域）。',
+  },
+  {
+    title: 'Google Gemini Live（海外 · 免绑卡免费档）',
+    url: 'https://aistudio.google.com/apikey',
+    linkText: 'aistudio.google.com/apikey',
+    note: '登录 Google 账号点 Create API key 即可免费体验，无需信用卡。',
+  },
+  {
+    title: 'OpenAI / 兼容中转站',
+    url: 'https://platform.openai.com/api-keys',
+    linkText: 'platform.openai.com/api-keys',
+    note: '或在「高级选项」填自定义地址。',
+  },
 ];
 
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
@@ -55,12 +97,19 @@ export function SettingsSheet(props: {
   config: PublicConfig | null;
   onClose: () => void;
   onSave: (next: RealtimeSettings) => void;
+  /** Set by App when 首页的「获取 API Key」requests the guide card. */
+  guideRequested?: boolean;
+  /** Called once after the guide was expanded, so App can reset guideRequested. */
+  onGuideShown?: () => void;
 }) {
-  const { open, value, config, onClose, onSave } = props;
+  const { open, value, config, onClose, onSave, guideRequested, onGuideShown } = props;
   const [draft, setDraft] = useState<RealtimeSettings>(() => withReviewMode(value));
   const [tab, setTab] = useState<Tab>(value.accessCode && !value.apiKey ? 'code' : 'key');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [guideOpen, setGuideOpen] = useState(false);
+  /** One-shot guard: don't re-expand (or re-notify App) on every render. */
+  const guideHandled = useRef(false);
 
   useEffect(() => {
     if (open) {
@@ -69,6 +118,20 @@ export function SettingsSheet(props: {
       setTab(value.accessCode && !value.apiKey ? 'code' : 'key');
     }
   }, [open, value]);
+
+  // A request from 首页 expands the API-key guide; the learner can still collapse it again.
+  useEffect(() => {
+    if (!open) {
+      guideHandled.current = false;
+      return;
+    }
+    if (!guideRequested || guideHandled.current) return;
+    guideHandled.current = true;
+    // The guide is about keys, so show the key tab if the sheet opened on 访问口令.
+    setTab('key');
+    setGuideOpen(true);
+    onGuideShown?.();
+  }, [open, guideRequested, onGuideShown]);
 
   if (!open) return null;
   const provider = PROVIDERS.find((item) => item.id === draft.provider) || PROVIDERS[0];
@@ -88,6 +151,18 @@ export function SettingsSheet(props: {
     }
     setDraft({ ...draft, reviewMode: mode });
   };
+
+  const pickProvider = (id: RealtimeSettings['provider']) => {
+    const preset = PROVIDERS.find((item) => item.id === id) || PROVIDERS[0];
+    const next: RealtimeSettings = { ...draft, provider: id, model: preset.models[0] };
+    // 纯语音模式下，自动精批可直接复用同一个 DeepSeek Key；仅在这个字段还没设置时才补默认。
+    if (id === 'deepseek' && !next.reviewMode) next.reviewMode = 'auto';
+    setDraft(next);
+  };
+
+  const toggleKeyGuide = () => setGuideOpen((current) => !current);
+
+  const accent: VoiceAccent = draft.voiceAccent === 'us' ? 'us' : 'uk';
 
   const testConnection = async () => {
     setTesting(true);
@@ -136,12 +211,35 @@ export function SettingsSheet(props: {
             <button
               key={item.id}
               className={'chip' + (draft.provider === item.id ? ' selected' : '')}
-              onClick={() => setDraft({ ...draft, provider: item.id, model: item.models[0] })}
+              onClick={() => pickProvider(item.id)}
             >
               {item.label}
             </button>
           ))}
         </div>
+
+        {draft.provider === 'deepseek' && (
+          <div className="voice-panel">
+            <p className="hint">
+              DeepSeek 纯语音：浏览器负责识别你的口语，Edge 神经网络负责考官朗读，1 个 DeepSeek Key
+              即可语音 + 实时字幕 + 精批，不需要实时语音 Key。
+            </p>
+            <div className="field">
+              <span>考官口音</span>
+              <div className="chips">
+                {VOICE_ACCENTS.map((item) => (
+                  <button
+                    key={item.id}
+                    className={'chip accent-chip' + (accent === item.id ? ' selected' : '')}
+                    onClick={() => setDraft({ ...draft, voiceAccent: item.id })}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {tab === 'key' ? (
           <>
@@ -194,6 +292,30 @@ export function SettingsSheet(props: {
             />
           </label>
         )}
+
+        <div className={'key-guide' + (guideOpen ? ' open' : '')}>
+          <button className="key-guide-head" onClick={toggleKeyGuide} aria-expanded={guideOpen}>
+            <span>还没有 API Key？各家获取方式与免费额度</span>
+            <span className="key-guide-toggle">{guideOpen ? '收起' : '展开'}</span>
+          </button>
+          {guideOpen && (
+            <div className="key-guide-body">
+              {KEY_GUIDES.map((guide) => (
+                <div className="key-guide-item" key={guide.url}>
+                  <strong>{guide.title}</strong>
+                  <a href={guide.url} target="_blank" rel="noreferrer">
+                    {guide.linkText}
+                  </a>
+                  <p>{guide.note}</p>
+                </div>
+              ))}
+              <p className="hint">
+                提示：网页版所有 Key 只存在当前浏览器的 localStorage。DeepSeek 纯语音模式 1 个 Key
+                即可；百炼 / Gemini / OpenAI 走的是端到端实时语音模式。
+              </p>
+            </div>
+          )}
+        </div>
 
         <div className="field">
           <span>精批方式</span>

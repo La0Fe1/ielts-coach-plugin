@@ -1,9 +1,11 @@
 /** One protocol for every provider; the browser only ever speaks this. */
 
+import type { Provider } from './types';
+
 export type ClientEvent =
   | {
       type: 'start_session';
-      provider: 'qwen' | 'gemini' | 'openai';
+      provider: Provider;
       model: string;
       voice?: string;
       endpointUrl?: string;

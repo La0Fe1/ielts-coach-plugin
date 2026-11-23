@@ -1,11 +1,103 @@
 import { useState } from 'react';
-import type { LessonRecord, MemoryNote } from '@ielts/shared';
+import type { GrammarMistake, LessonRecord, MemoryNote, TurnFeedback } from '@ielts/shared';
 
 const STATUS_LABEL: Record<'planned' | 'live' | 'completed', string> = {
   planned: '待上课',
   live: '进行中',
   completed: '已完成',
 };
+
+/**
+ * Review JSON can be written back by an external AI client (豆包 / dsh / Codex)
+ * through MCP, so every field is treated as possibly missing or the wrong type.
+ */
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function asItems<T>(value: T[] | null | undefined): T[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is T => Boolean(item) && typeof item === 'object');
+}
+
+function asStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(asText).filter((item) => item.length > 0);
+}
+
+function formatBand(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) : '—';
+}
+
+function MistakeRow({ mistake }: { mistake: GrammarMistake }) {
+  const original = asText(mistake.original);
+  const corrected = asText(mistake.corrected);
+  const category = asText(mistake.category);
+  const explanation = asText(mistake.explanation_zh);
+  if (!original && !corrected) return null;
+  return (
+    <div className="mistake">
+      <strong>
+        {original && <span className="wrong">{original}</span>}
+        {original && corrected ? ' → ' : null}
+        {corrected && <span className="right">{corrected}</span>}
+      </strong>
+      {(category || explanation) && (
+        <span>{[category, explanation].filter((item) => item).join(' · ')}</span>
+      )}
+    </div>
+  );
+}
+
+/** A single saved TurnFeedback block, shown under its user subtitle in history. */
+function LineFeedback({ feedback }: { feedback: TurnFeedback }) {
+  const corrected = asText(feedback.corrected_text);
+  const upgraded = asText(feedback.upgraded_text);
+  const coachNote = asText(feedback.coach_note_zh);
+  const mistakes = asItems(feedback.grammar_mistakes);
+  const tips = asItems(feedback.lexical_tips);
+  if (!corrected && !upgraded && !coachNote && mistakes.length === 0 && tips.length === 0) return null;
+  return (
+    <div className="history-feedback">
+      {(corrected || upgraded) && (
+        <div className="diff">
+          {corrected && (
+            <div>
+              <span className="tag">修正</span>
+              <span className="right">{corrected}</span>
+            </div>
+          )}
+          {upgraded && (
+            <div className="upgraded">
+              <span className="tag">Band 8</span>
+              {upgraded}
+            </div>
+          )}
+        </div>
+      )}
+      {mistakes.map((mistake, index) => (
+        <MistakeRow key={String(index)} mistake={mistake} />
+      ))}
+      {tips.map((tip, index) => {
+        const basic = asText(tip.basic);
+        const better = asText(tip.upgraded);
+        const usage = asText(tip.usage_zh);
+        if (!basic && !better) return null;
+        return (
+          <div className="mistake" key={'tip-' + String(index)}>
+            <strong>
+              {basic && <span className="wrong">{basic}</span>}
+              {basic && better ? ' → ' : null}
+              {better && <span className="right">{better}</span>}
+            </strong>
+            {usage && <span>{usage}</span>}
+          </div>
+        );
+      })}
+      {coachNote && <p className="hint coach-note">{coachNote}</p>}
+    </div>
+  );
+}
 
 function lessonStatus(lesson: LessonRecord): 'planned' | 'live' | 'completed' {
   if (lesson.status) return lesson.status;
@@ -32,6 +124,12 @@ export function HistorySheet(props: {
     onClose();
   };
 
+  const report = selected?.report || null;
+  const reportBands = report?.bands;
+  const reportSummary = asText(report?.summary_zh);
+  const reportMistakes = asItems(report?.top_mistakes);
+  const reportUpgraded = asStringList(report?.upgraded_sentences);
+
   return (
     <div className="sheet-backdrop" onClick={close}>
       <div className="sheet" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
@@ -44,22 +142,47 @@ export function HistorySheet(props: {
               · {STATUS_LABEL[lessonStatus(selected)]}
             </p>
             <div className="history-lines">
-              {selected.lines.map((line) => (
-                <div key={line.id} className={'line ' + line.role}>
-                  <span className="who">{line.role === 'user' ? '你' : '考官'}</span>
-                  {line.text}
-                </div>
-              ))}
+              {selected.lines.map((line) => {
+                // Saved per-sentence review (from the web coach or an external AI via MCP).
+                const saved = line.role === 'user' && selected.feedback ? selected.feedback[line.id] : undefined;
+                const lineFeedback = saved && typeof saved === 'object' ? saved : null;
+                return (
+                  <div key={line.id} className="history-line-block">
+                    <div className={'line ' + line.role}>
+                      <span className="who">{line.role === 'user' ? '你' : '考官'}</span>
+                      {line.text}
+                    </div>
+                    {lineFeedback && <LineFeedback feedback={lineFeedback} />}
+                  </div>
+                );
+              })}
             </div>
             {selected.report && (
               <div className="panel-card">
                 <h3>四维评分</h3>
                 <p>
-                  Overall {selected.report.bands.overall.toFixed(1)} · FC {selected.report.bands.fc.toFixed(1)} · LR{' '}
-                  {selected.report.bands.lr.toFixed(1)} · GRA {selected.report.bands.gra.toFixed(1)} · PR{' '}
-                  {selected.report.bands.pr.toFixed(1)}
+                  Overall {formatBand(reportBands?.overall)} · FC {formatBand(reportBands?.fc)} · LR{' '}
+                  {formatBand(reportBands?.lr)} · GRA {formatBand(reportBands?.gra)} · PR {formatBand(reportBands?.pr)}
                 </p>
-                <p className="hint">{selected.report.summary_zh}</p>
+                {reportSummary && <p className="hint">{reportSummary}</p>}
+                {reportMistakes.length > 0 && (
+                  <div className="report-list">
+                    <h4>Top 错题</h4>
+                    {reportMistakes.map((mistake, index) => (
+                      <MistakeRow key={String(index)} mistake={mistake} />
+                    ))}
+                  </div>
+                )}
+                {reportUpgraded.length > 0 && (
+                  <div className="report-list">
+                    <h4>可以直接背的升级句</h4>
+                    <ul>
+                      {reportUpgraded.map((sentence, index) => (
+                        <li key={String(index)}>{sentence}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
             <div className="sheet-actions">
@@ -87,7 +210,7 @@ export function HistorySheet(props: {
                       <span>{lesson.topic || '未命名话题'}</span>
                       <em className={'history-status ' + status}>
                         {STATUS_LABEL[status]}
-                        {lesson.report ? ' · Overall ' + lesson.report.bands.overall.toFixed(1) : ''}
+                        {lesson.report ? ' · Overall ' + formatBand(lesson.report.bands?.overall) : ''}
                       </em>
                     </button>
                   );

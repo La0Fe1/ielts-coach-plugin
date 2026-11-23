@@ -226,3 +226,83 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   padding: 12px; font: inherit; font-size: 13.5px; line-height: 1.65;
   white-space: pre-wrap; word-break: break-word; max-height: 46dvh; overflow-y: auto;
 }
+
+/* ── v2.2.0: DeepSeek 纯语音 · API Key 指南 · 识别兜底 ─────────────────── */
+
+.key-guide-link { color: var(--muted); }
+.key-guide-link:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+
+.voice-panel {
+  display: grid; gap: 10px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 14px;
+  padding: 12px 14px;
+}
+.voice-panel .hint { margin: 0; }
+.voice-panel .chip { font-size: 13.5px; padding: 8px 12px; }
+
+.key-guide { border: 1px solid var(--line); border-radius: 14px; background: var(--paper); overflow: hidden; }
+.key-guide.open { background: var(--card); border-color: #d5dcf0; }
+.key-guide-head {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 14px; border: none; border-radius: 0; background: transparent;
+  text-align: left; font-size: 13.5px; color: var(--ink-soft);
+}
+.key-guide-head:hover { color: var(--accent); }
+.key-guide-toggle { flex: none; font-size: 12px; color: var(--muted); }
+.key-guide-body { display: grid; gap: 12px; padding: 2px 14px 14px; }
+.key-guide-item { display: grid; gap: 3px; }
+.key-guide-item strong { font-size: 13.5px; color: var(--ink); }
+.key-guide-item a { font-size: 12.5px; color: var(--accent); text-decoration: none; word-break: break-all; }
+.key-guide-item a:hover { text-decoration: underline; }
+.key-guide-item p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.key-guide-body .hint { margin: 0; border-top: 1px dashed var(--line); padding-top: 10px; }
+
+.pill-toggle {
+  border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);
+  cursor: pointer; font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 999px;
+}
+.pill-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+.notice-banner {
+  display: flex; gap: 8px; align-items: flex-start;
+  padding: 10px 14px; margin-bottom: 10px;
+  background: #fff8ec; border: 1px solid #f0dfc0; border-radius: 12px;
+  color: #7a5a17; font-size: 13px; line-height: 1.55;
+}
+.notice-banner-icon { flex: none; }
+
+.typing-row { display: flex; gap: 8px; align-items: center; padding: 4px 0 10px; }
+.typing-input {
+  flex: 1; min-width: 0;
+  padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); font: inherit; font-size: 14px;
+}
+.typing-input:focus { outline: none; border-color: var(--accent); }
+.typing-send { flex: none; padding: 11px 18px; font-size: 14px; border-radius: 12px; }
+
+.history-lines { display: grid; gap: 12px; }
+.history-line-block { display: grid; gap: 6px; }
+.history-lines .line { max-width: 100%; }
+.history-feedback {
+  display: grid; gap: 10px;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper);
+  font-size: 13.5px; line-height: 1.6; overflow-wrap: anywhere;
+}
+.history-feedback .diff { font-size: 13.5px; }
+.history-feedback .upgraded { font-size: 13.5px; }
+.history-feedback .mistake { margin: 0; }
+.history-feedback .wrong { color: var(--coral); text-decoration: line-through; text-decoration-thickness: 1px; }
+.history-feedback .right { color: var(--jade); }
+.history-feedback .coach-note { margin: 0; color: var(--ink-soft); }
+
+.report-list { margin-top: 12px; }
+.report-list h4 { margin: 0 0 6px; font-size: 13px; color: var(--ink-soft); }
+.report-list ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.report-list li { font-size: 13.5px; line-height: 1.6; color: var(--ink-soft); }
+
+@media (max-width: 768px) {
+  .typing-row { gap: 6px; padding-bottom: 8px; }
+  .typing-input { font-size: 16px; } /* keep iOS from zooming the page on focus */
+  .notice-banner { font-size: 12.5px; }
+  .key-guide-head { padding: 11px 12px; }
+}

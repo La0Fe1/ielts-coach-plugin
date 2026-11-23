@@ -1,6 +1,11 @@
 /** Shared domain types for the v2 realtime coach. */
 
-export type Provider = 'qwen' | 'gemini' | 'openai';
+/**
+ * Real-time voice providers. `deepseek` is the v2.2.0 pure-voice mode: the
+ * browser's SpeechRecognition does the listening, the server streams DeepSeek
+ * text turns and Edge Neural TTS reads the examiner aloud. No realtime key needed.
+ */
+export type Provider = 'deepseek' | 'qwen' | 'gemini' | 'openai';
 export type PartMode = 'part1' | 'part2' | 'part3' | 'full_mock';
 export type TurnMode = 'auto' | 'manual';
 export type ExaminerStyle = 'friendly' | 'strict' | 'coach';
@@ -95,7 +100,23 @@ export interface LessonReport {
 
 export interface PublicConfig {
   hasAccessCode: boolean;
-  serverProviders: Record<Provider | 'deepseek', boolean>;
+  serverProviders: Record<Provider, boolean>;
+}
+
+/** One SSE frame produced by POST /api/voice/deepseek-turn. */
+export type DeepSeekVoiceEvent =
+  | { type: 'delta'; delta: string }
+  | { type: 'done'; text: string }
+  | { type: 'error'; message: string };
+
+export interface DeepSeekTurnRequest {
+  model?: string;
+  systemPrompt: string;
+  messages: Array<{ role: 'user' | 'assistant'; text: string }>;
+  apiKey?: string;
+  accessCode?: string;
+  endpointUrl?: string;
+  maxTokens?: number;
 }
 
 export interface RealtimeSettings {
@@ -110,12 +131,13 @@ export interface RealtimeSettings {
   coachApiKey?: string;
   coachBaseUrl?: string;
   coachModel?: string;
-  /**
-   * auto = web app reuses the current provider for review;
+  /** auto = web app reuses the current provider for review;
    * deepseek = dedicated DeepSeek preset; custom = user-supplied OpenAI-compatible endpoint;
    * external = no per-turn API calls; the transcript is reviewed in 豆包 / dsh / Codex.
    */
   reviewMode?: ReviewMode;
+  /** Examiner voice used by the DeepSeek pure-voice mode (Edge Neural TTS). */
+  voiceAccent?: 'uk' | 'us';
   partMode: PartMode;
   targetBand: number;
   style: ExaminerStyle;

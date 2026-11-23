@@ -36,10 +36,27 @@ export function LiveStage(props: {
   mobileSide: boolean;
   onToggleMobileSide: () => void;
   coachBanner?: string | null;
+  /* v2.2.0 DeepSeek pure-voice mode — all optional so existing call sites stay valid. */
+  /** Browser SpeechRecognition is unavailable/broken: show the fallback typing row. */
+  typingEnabled?: boolean;
+  onTypingSubmit?: (text: string) => void;
+  /** Recognition language currently in use; toggles between 英文 and 中文. */
+  recognitionLanguage?: 'en' | 'zh';
+  onToggleRecognitionLanguage?: () => void;
+  /** Friendly, non-blocking hint shown above the subtitles (never the error modal). */
+  notice?: string | null;
 }) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [scratch, setScratch] = useState<string[]>(['', '', '', '']);
+  const [typed, setTyped] = useState('');
+
+  const submitTyping = () => {
+    const text = typed.trim();
+    if (!text) return;
+    setTyped('');
+    props.onTypingSubmit?.(text);
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -77,10 +94,22 @@ export function LiveStage(props: {
 
         <div className="pills">
           {props.coachBanner && <span className="pill">{props.coachBanner}</span>}
+          {props.recognitionLanguage && props.onToggleRecognitionLanguage && (
+            <button className="pill pill-toggle" onClick={props.onToggleRecognitionLanguage} title="切换识别语言">
+              🎤 识别：{props.recognitionLanguage === 'zh' ? '中文' : '英文'}
+            </button>
+          )}
           <span className="pill">{props.handsFree ? '自动接话' : '手动提交'}</span>
           <span className="pill neutral">{props.speakerMode ? '🔊 外放防回声' : '🎧 耳机模式'}</span>
           {props.muted && <span className="pill neutral">麦克风已静音</span>}
         </div>
+
+        {props.notice && (
+          <div className="notice-banner" role="status">
+            <span className="notice-banner-icon">💡</span>
+            <span>{props.notice}</span>
+          </div>
+        )}
 
         {props.cue && (
           <div className="panel-card">
@@ -168,6 +197,27 @@ export function LiveStage(props: {
           )}
           <div ref={bottomRef} />
         </div>
+
+        {props.typingEnabled && (
+          <form
+            className="typing-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitTyping();
+            }}
+          >
+            <input
+              className="typing-input"
+              value={typed}
+              placeholder="浏览器识别不可用时，也可直接打字回答…"
+              aria-label="打字回答"
+              onChange={(event) => setTyped(event.target.value)}
+            />
+            <button className="primary typing-send" type="submit" disabled={!typed.trim()}>
+              发送
+            </button>
+          </form>
+        )}
 
         <div className="micbar">
           <button className="ghost" onClick={props.onToggleMute}>

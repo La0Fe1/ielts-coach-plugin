@@ -9,6 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import {
   isClientEvent,
   type ClientEvent,
+  type DeepSeekTurnRequest,
   type Provider,
   type ReviewMode,
   type ServerEvent,
@@ -25,6 +26,7 @@ import {
   serverProviders,
 } from './auth';
 import { analyzeTurn, generateReport, pingCoach } from './coach';
+import { streamDeepSeekTurn, synthesizeSpeech } from './deepseek-voice';
 import { allowMcpRequest, isLoopback, mcpToken } from './mcp-core';
 import { mountMcp } from './mcp-http';
 import {
@@ -37,7 +39,7 @@ import {
   upsertMemory,
 } from './store';
 
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.2.0';
 const PORT = Number(process.env.PORT || 3000);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webDist = path.resolve(here, '../../web/dist');
@@ -76,7 +78,12 @@ function serverStatus(): {
   };
 }
 
-const ADAPTERS: Record<Provider, RealtimeAdapter> = {
+/**
+ * Real-time WebSocket providers. `deepseek` (v2.2.0 pure-voice mode) has no
+ * upstream websocket at all: the browser records locally and calls
+ * POST /api/voice/deepseek-turn, so a missing adapter here is expected.
+ */
+const ADAPTERS: Partial<Record<Provider, RealtimeAdapter>> = {
   qwen: new QwenAdapter(),
   gemini: new GeminiAdapter(),
   openai: new OpenAIAdapter(),
@@ -124,6 +131,37 @@ function coachError(res: express.Response, error: unknown): void {
     return;
   }
   res.status(502).json({ error: String((error as Error).message || error) });
+}
+
+/**
+ * Validate POST /api/voice/deepseek-turn (v2.2.0 pure-voice mode).
+ * Only the shape is enforced here; credentials are resolved separately so an
+ * auth failure can still answer with a plain JSON 401 before any SSE starts.
+ */
+function deepSeekTurnInput(body: Record<string, unknown>): DeepSeekTurnRequest | null {
+  if (typeof body.systemPrompt !== 'string') return null;
+  if (!Array.isArray(body.messages)) return null;
+  const messages: DeepSeekTurnRequest['messages'] = [];
+  for (const raw of body.messages) {
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as Record<string, unknown>;
+    const role = item.role === 'assistant' ? 'assistant' : item.role === 'user' ? 'user' : null;
+    if (!role) continue;
+    const text =
+      typeof item.text === 'string' ? item.text : typeof item.content === 'string' ? item.content : '';
+    if (!text.trim()) continue;
+    messages.push({ role, text });
+  }
+  return {
+    systemPrompt: body.systemPrompt,
+    messages,
+    model: typeof body.model === 'string' ? body.model : undefined,
+    apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
+    accessCode: typeof body.accessCode === 'string' ? body.accessCode : undefined,
+    endpointUrl: typeof body.endpointUrl === 'string' ? body.endpointUrl : undefined,
+    maxTokens:
+      typeof body.maxTokens === 'number' && Number.isFinite(body.maxTokens) ? body.maxTokens : undefined,
+  };
 }
 
 app.post('/api/coach/analyze-turn', async (req, res) => {
@@ -275,6 +313,68 @@ app.delete('/api/memory/:id', (req, res) => {
   res.json({ removed: deleteMemory([String(req.params.id)]) });
 });
 
+/**
+ * v2.2.0 DeepSeek pure-voice mode. Registered before express.static / app.get('*')
+ * so these API routes always win over the SPA fallback.
+ *
+ * - POST /api/voice/deepseek-turn : SSE stream of one examiner turn
+ *   (same BYOK / ACCESS_CODE rules as every other provider).
+ * - POST /api/voice/tts : Edge Neural TTS MP3. No key of its own; on failure the
+ *   browser falls back to window.speechSynthesis (503 lets it detect that).
+ */
+app.post('/api/voice/deepseek-turn', async (req, res) => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const input = deepSeekTurnInput(body);
+  if (!input) {
+    res.status(400).json({ error: '请求格式不正确：需要 systemPrompt 字符串与 messages 数组' });
+    return;
+  }
+  let apiKey = '';
+  try {
+    apiKey = resolveCredential({
+      provider: 'deepseek',
+      apiKey: input.apiKey,
+      accessCode: input.accessCode,
+    }).apiKey;
+  } catch (error) {
+    coachError(res, error);
+    return;
+  }
+  try {
+    await streamDeepSeekTurn({ ...input, apiKey }, req, res);
+  } catch (error) {
+    // streamDeepSeekTurn reports its own failures as SSE `error` frames; this
+    // only catches truly unexpected wiring errors.
+    if (!res.headersSent) coachError(res, error);
+    else if (!res.writableEnded) res.end();
+  }
+});
+
+app.post('/api/voice/tts', async (req, res) => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const text = typeof body.text === 'string' ? body.text.trim().slice(0, 2000) : '';
+  if (!text) {
+    res.status(400).json({ error: '缺少要朗读的文本' });
+    return;
+  }
+  const accent: 'uk' | 'us' = body.accent === 'us' ? 'us' : 'uk';
+  const voice = typeof body.voice === 'string' ? body.voice.trim() : '';
+  try {
+    const audio = voice ? await synthesizeSpeech(text, accent, voice) : await synthesizeSpeech(text, accent);
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', String(audio.length));
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(audio);
+  } catch (error) {
+    console.error('[ielts-v2] Edge TTS 失败: ' + String((error as Error).message || error));
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    res.status(503).json({ error: 'TTS 暂不可用，请使用浏览器朗读' });
+  }
+});
+
 mountMcp(app);
 
 app.use(express.static(webDist, { index: 'index.html' }));
@@ -352,6 +452,8 @@ wss.on('connection', (ws: WebSocket) => {
           fail('不支持的实时语音服务商', false);
           return;
         }
+        // Adapters exist only for qwen / gemini / openai (deepseek is HTTP SSE).
+        const realtimeProvider = provider as StartSettings['provider'];
         let apiKey = '';
         try {
           apiKey = resolveCredential({
@@ -370,7 +472,7 @@ wss.on('connection', (ws: WebSocket) => {
           return;
         }
         const settings: StartSettings = {
-          provider,
+          provider: realtimeProvider,
           model: event.model,
           voice: event.voice,
           endpointUrl: event.endpointUrl,

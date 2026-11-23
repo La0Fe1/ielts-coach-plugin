@@ -25,6 +25,11 @@ export function SetupCard(props: {
   onStart: () => void;
   onOpenSettings: () => void;
   onOpenHistory: () => void;
+  /**
+   * Optional so the component compiles before App.tsx wires the guide:
+   * opens 连接设置 with the "how to get an API key" card already expanded.
+   */
+  onOpenKeyGuide?: () => void;
   busy: boolean;
   error: string | null;
   ready: boolean;
@@ -32,8 +37,19 @@ export function SetupCard(props: {
   /** Set when the page was opened with ?lesson=<id> and the AI client planned this lesson. */
   coachBanner?: CoachBanner | null;
 }) {
-  const { settings, onChange, onStart, onOpenSettings, onOpenHistory, busy, error, ready, historyCount, coachBanner } =
-    props;
+  const {
+    settings,
+    onChange,
+    onStart,
+    onOpenSettings,
+    onOpenHistory,
+    onOpenKeyGuide,
+    busy,
+    error,
+    ready,
+    historyCount,
+    coachBanner,
+  } = props;
   const lockedToCoachPlan = Boolean(coachBanner);
   return (
     <div className="setup-wrap">
@@ -115,6 +131,11 @@ export function SetupCard(props: {
           <button className="ghost" onClick={onOpenHistory}>
             历史课{historyCount > 0 ? '（' + String(historyCount) + '）' : ''}
           </button>
+          {onOpenKeyGuide && (
+            <button className="ghost key-guide-link" onClick={onOpenKeyGuide}>
+              获取 API Key
+            </button>
+          )}
         </div>
       </div>
     </div>

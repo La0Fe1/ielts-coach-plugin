@@ -1,11 +1,14 @@
+import http from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AuthError,
   DEEPSEEK_BASE_URL,
   DEEPSEEK_MODEL,
   resolveCoachConfig,
+  resolveCredential,
   serverProviders,
 } from '../src/auth';
+import { pingCoach } from '../src/coach';
 
 const ENV_KEYS = [
   'DEEPSEEK_API_KEY',
@@ -189,5 +192,120 @@ describe('resolveCoachConfig: auto mode', () => {
     const error = catchAuthError(() => resolveCoachConfig({ provider: 'qwen' }));
     expect(error.code).toBe('no_credentials');
     expect(error.status).toBe(401);
+  });
+});
+
+describe('resolveCredential: deepseek pure-voice mode', () => {
+  it('accepts a BYOK DeepSeek key without any server env', () => {
+    resetEnv();
+    expect(resolveCredential({ provider: 'deepseek', apiKey: 'sk-ds-byok' })).toEqual({
+      apiKey: 'sk-ds-byok',
+      source: 'byok',
+    });
+  });
+
+  it('uses the host DEEPSEEK_API_KEY with a valid access code', () => {
+    resetEnv();
+    vi.stubEnv('DEEPSEEK_API_KEY', 'sk-ds-server');
+    vi.stubEnv('ACCESS_CODE', 'ielts2026');
+    expect(resolveCredential({ provider: 'deepseek', accessCode: 'ielts2026' })).toEqual({
+      apiKey: 'sk-ds-server',
+      source: 'server',
+    });
+  });
+
+  it('refuses the host key when no access code is configured', () => {
+    resetEnv();
+    vi.stubEnv('DEEPSEEK_API_KEY', 'sk-ds-server');
+    const error = catchAuthError(() => resolveCredential({ provider: 'deepseek' }));
+    expect(error.code).toBe('access_code_not_configured');
+    expect(error.status).toBe(401);
+  });
+
+  it('refuses a wrong access code and reports missing credentials clearly', () => {
+    resetEnv();
+    vi.stubEnv('DEEPSEEK_API_KEY', 'sk-ds-server');
+    vi.stubEnv('ACCESS_CODE', 'ielts2026');
+    const wrong = catchAuthError(() => resolveCredential({ provider: 'deepseek', accessCode: 'nope' }));
+    expect(wrong.code).toBe('bad_access_code');
+    expect(wrong.status).toBe(401);
+
+    resetEnv();
+    const none = catchAuthError(() => resolveCredential({ provider: 'deepseek' }));
+    expect(none.code).toBe('no_credentials');
+    expect(none.status).toBe(401);
+  });
+
+  it('reports deepseek in serverProviders only when DEEPSEEK_API_KEY is set', () => {
+    resetEnv();
+    expect(serverProviders().deepseek).toBe(false);
+    vi.stubEnv('DEEPSEEK_API_KEY', 'sk-ds-server');
+    expect(serverProviders()).toEqual({
+      deepseek: true,
+      qwen: false,
+      gemini: false,
+      openai: false,
+    });
+  });
+});
+
+describe('resolveCoachConfig: provider=deepseek pure-voice mode', () => {
+  it('reuses a BYOK DeepSeek key on the DeepSeek endpoint for review', () => {
+    resetEnv();
+    const config = resolveCoachConfig({ provider: 'deepseek', apiKey: 'sk-ds-byok' });
+    expect(config).toEqual({ baseUrl: DEEPSEEK_BASE_URL, model: DEEPSEEK_MODEL, apiKey: 'sk-ds-byok' });
+  });
+
+  it('reuses the host DeepSeek key with a valid access code', () => {
+    resetEnv();
+    vi.stubEnv('DEEPSEEK_API_KEY', 'sk-ds-server');
+    vi.stubEnv('ACCESS_CODE', 'ielts2026');
+    const config = resolveCoachConfig({ provider: 'deepseek', accessCode: 'ielts2026' });
+    expect(config).toMatchObject({
+      baseUrl: DEEPSEEK_BASE_URL,
+      model: DEEPSEEK_MODEL,
+      apiKey: 'sk-ds-server',
+    });
+  });
+
+  it('keeps the DeepSeek endpoint for a dedicated coach key', () => {
+    resetEnv();
+    const config = resolveCoachConfig({ provider: 'deepseek', coachApiKey: 'sk-coach-ds' });
+    expect(config).toEqual({ baseUrl: DEEPSEEK_BASE_URL, model: DEEPSEEK_MODEL, apiKey: 'sk-coach-ds' });
+  });
+
+  it('test-connection for deepseek pings DeepSeek with the resolved key (local fake upstream)', async () => {
+    resetEnv();
+    const requests: Array<{ authorization?: string; body?: Record<string, unknown> }> = [];
+    const server = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        requests.push({
+          authorization: req.headers.authorization,
+          body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {},
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const port = (server.address() as { port: number }).port;
+      const config = resolveCoachConfig({
+        provider: 'deepseek',
+        coachApiKey: 'sk-coach-ds',
+        coachBaseUrl: 'http://127.0.0.1:' + String(port) + '/v1',
+      });
+      const result = await pingCoach(config);
+      expect(result.ok).toBe(true);
+      expect(requests[0].authorization).toBe('Bearer sk-coach-ds');
+      expect(requests[0].body?.model).toBe(DEEPSEEK_MODEL);
+      expect(requests[0].body?.messages).toBeTruthy();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

@@ -171,3 +171,97 @@ MCP 写回 schema 对 LLM 多余字段容错（拒绝整包写入会丢失用户
 **仍未验证**：真实厂商 Key / 真实语音通话、真实 AI 客户端 GUI 点击、真机 Safari/Android、
 `docker build` 与云平台部署、macOS/Linux 的 `ielts-mcp.sh` 实际执行（如上第三节）。
 
+---
+
+# v2.2.0 交付说明（DeepSeek 纯语音模式，2026-11-23）
+
+## 一、本版范围
+
+1. **DeepSeek 纯语音模式**（新服务商 `deepseek`）：只要 1 个 DeepSeek Key 就能开麦，不再需要
+   百炼 / Gemini / OpenAI 的实时语音 Key。
+   - **听写**：浏览器原生 `SpeechRecognition`（`continuous` + `interimResults`），通话中可切换
+     英文 / 中文识别；Safari / Chrome 自动断段重启时用「已提交前缀 + 本段 final + interim」拼接，
+     尽量不断字。
+   - **提交**：自由模式约 1.35–1.75 秒停顿自动提交；手动模式 / Part 2 独白不自动截断，
+     点「我说完了」才提交。
+   - **考官回复**：`POST /api/voice/deepseek-turn` 以 SSE 流式调用 `deepseek-chat`
+     （`delta` / `done` / `error` 帧），支持自带 Key、`ACCESS_CODE` 共享与 `endpointUrl`
+     自定义中转；客户端断开即中止上游请求。
+   - **考官语音**：`POST /api/voice/tts` 用微软 Edge Neural TTS（`@andresaya/edge-tts`）合成 MP3，
+     英音 `en-GB-SoniaNeural` / 美音 `en-US-JennyNeural`，中文占比高时自动换 `zh-CN-XiaoxiaoNeural`；
+     前端用已解锁的 `AudioContext.decodeAudioData` 播放，规避 Safari / iOS 自动播放拦截。
+   - **兜底**：TTS 失败返回 503，前端自动回退 `window.speechSynthesis`；浏览器不支持识别或识别报
+     `network` 错误时自动展开底部打字输入框；考官播报期间暂停识别防回声；点「打断」立即停朗读 /
+     中止 SSE 并开麦。
+2. **设置与 API Key 指南**：服务商首位新增「DeepSeek 纯语音（仅需 DeepSeek Key）」（模型预设
+   `deepseek-chat` / `deepseek-reasoner`）与考官口音（英音 Sonia / 美音 Jenny）；设置内新增
+   「还没有 API Key？各家获取方式与免费额度」折叠指南；首页新增「获取 API Key」按钮；
+   README 新增第二节《如何获取 API Key（含免费额度）》。
+3. **修复 v2.1.0 走查发现的 3 个缺陷**（实现细节以 `docs/RELEASE_NOTES_v2.2.0.md` 为准）：
+   - 历史课详情补齐逐句精批卡片（红绿修正 / Band 8 升级句 / 错因 / 点评）与四维报告的
+     `top_mistakes`、`upgraded_sentences` 渲染；本地与服务端课程合并时，只写回精批、
+     还没出报告的课程也能立刻显示；
+   - `save_turn_feedback` 的 `items` 由 `z.strictObject` 放宽为 `z.object`，容忍豆包 / Codex / dsh
+     多传 `turnIndex` 等字段，不再整包拒收；
+   - 浏览器同步在 `MULTI_USER_MODE=true` 部署下按需携带 `Authorization: Bearer <accessCode>`
+     （课程同步 / 记忆接口）。
+4. **打包与文档**：`@andresaya/edge-tts@^1.9.1` 加入 server 依赖（lock 已含该条目及其依赖）；
+   版本统一 `2.2.0` —— root / shared / server / web 四个 `package.json` 的 `version`，以及
+   `package-lock.json` 的 `version`、`packages[""].version`、`packages["shared"]`、
+   `packages["server"]`、`packages["web"]` 共 5 处；`.env.example` 补充 DeepSeek 说明。
+   **没有新增环境变量**：纯语音模式复用 `DEEPSEEK_API_KEY`，朗读走微软 Edge TTS（免费、无 Key）。
+
+## 二、交付文档整理时复核过的事实（不代替 lead 最终验收）
+
+| 项目 | 方法 | 结果 |
+| --- | --- | --- |
+| 版本号 | `node` + `JSON.parse` 读取 4 个 `package.json` 与 `package-lock.json` | 9 处 version 中 4 个 package.json + lock 的 5 个 workspace 字段均为 `2.2.0`；`@andresaya/edge-tts@1.9.1` 条目与其 `commander` / `ws` 依赖完好；第三方包自带的 `2.1.0`（content-type / type-is）未误改 |
+| 文本编码 | 防 BOM 字节检查 | `README.md`、`.env.example`、`docs/V2_DELIVERY.md`、`docs/RELEASE_NOTES_v2.2.0.md`、`package*.json` 均 UTF-8 无 BOM |
+| README 官方入口 | 逐个 HTTP 访问 | DeepSeek 开放平台 200；百炼控制台 200；Gemini AI Studio 跳转 `accounts.google.com` 登录（正常）；OpenAI 平台 403 Cloudflare 人机拦截（正常，非 404） |
+| Edge Neural TTS | 真实微软服务调用（实现期间记录） | 可合成 MP3（英音 / 美音 / 中文自动音色） |
+| DeepSeek SSE 路由 | 本地假 OpenAI SSE 上游（实现期间记录） | 流式 `delta` / `done` 与鉴权拦截跑通；**真实 DeepSeek 端点未实测** |
+
+## 三、已知限制（如实标注，发布前请读完）
+
+1. **真实 DeepSeek Key 未实测**：本机没有可用的真实 DeepSeek Key；`deepseek-chat` 的流式输出、
+   计费、内容质量与真实端点连通性都没有跑过，SSE 只对本地假上游验证到「协议与鉴权正确」。
+2. **真实浏览器语音识别 / 真麦克风未实测**：本机是无头开发环境，`SpeechRecognition` 的英 / 中文
+   识别效果、自动断段重启拼接、回声防护、自动 / 手动提交的停顿阈值都未在真实 Chrome / Safari 上跑过；
+   实现依据浏览器行为规范，需真机复核。
+3. **Safari 断段拼接为 best-effort**：Safari 会在静音 / 超时后结束识别会话，代码在每次 `onend` 后
+   带累积前缀重启；极长句或频繁重启时仍可能偶发断字 / 丢尾字。
+4. **延迟**：DeepSeek 纯语音不是端到端实时语音，体感延迟 = 识别停顿提交（约 1.35–1.75 秒）+
+   DeepSeek 文本往返 + 首句 TTS 合成播放，预计 1.5–3 秒；不要拿它与百炼 / Gemini / OpenAI 的
+   < 1 秒端到端模式对比。
+5. **依赖网络**：需能访问 `api.deepseek.com` 与微软 TTS 服务；**Chrome 的语音识别服务在国内网络下
+   可能报 `network` 错误**（此时可换 Safari 或使用打字输入兜底）；Firefox 不支持 `SpeechRecognition`。
+6. **TTS 稳定性**：Edge TTS 是微软 Edge 朗读服务的轻量封装，偶发 503 / 限流时会自动回退浏览器
+   `speechSynthesis`（音色变为系统音）；长时间高频调用未做压力测试。
+7. **真机 iPhone Safari / Android 未实测**：沿用 v2.0 / v2.1 的未实测项 —— 麦克风解锁、
+   `AudioContext` 解锁播放、PWA 安装仍需真机验证。
+8. **沿用 v2.1.0 的未实测项**：真实百炼 / Gemini / OpenAI Key 的外网连通与音色、真实 AI 客户端 GUI、
+   `docker build` 与云平台部署、macOS / Linux 的 `.sh` 包装脚本，均未在本版重新验证。
+9. **TTS 端点未鉴权**：`POST /api/voice/tts` 按规格是给网页直接调用的免费朗读接口（不消耗用户 Key），
+   公网部署时第三方也可直接调用（微软侧会限流）。介意的话请在反向代理 / CDN 层加同源或频率限制。
+
+## 四、验收结果（lead 最终复跑，2026-11-23，可复现）
+
+> 以下数字是 lead 在**合并全部并行改动之后**重新执行的，不是并行任务中途的数字。
+
+| 项目 | 命令 / 方法 | 结果 |
+| --- | --- | --- |
+| 版本号 | `node` 读取 4 个 `package.json` + `package-lock.json` 的 5 处 workspace version | root / shared / server / web 全部 `2.2.0`；lock 的 5 处 workspace version 同为 `2.2.0`；`@andresaya/edge-tts@1.9.1` 条目完好 |
+| 类型检查 | `npm run typecheck` | exit 0（shared + server + web 全部 `tsc --noEmit` 通过） |
+| 生产构建 | `npm run build` | exit 0（vite 45 模块，`dist/assets/index-*.js` 233.77 KB / gzip 75.35 KB，CSS 13.38 KB；server `tsc --noEmit` 通过） |
+| 自动化测试 | `npm test` | **8 个测试文件 / 85 项全部通过**（v2.1.0 的 56 项全绿 + deepseek 鉴权 9 项 + 纯语音 19 项 + `save_turn_feedback` 回归 1 项）；含真实 STDIO 子进程、MCP HTTP 全链路、SSE 假上游、TTS 文本处理 |
+| 真实进程 E2E smoke（21 项断言全过） | 独立 Node 脚本拉起真实 `server/src/index.ts`（端口 3991/3992 + 临时数据目录） | `/health` 与 `/api/status` 均报 `2.2.0`；`GET /` 正常；`POST /api/voice/deepseek-turn` 对本地假 OpenAI SSE 上游：`delta` 顺序拼接、`done` 全文一致、上游收到 `Bearer <BYOK key>`、`model/temperature 0.65/max_tokens 260/stream true`、system prompt 为首条消息、400/401（`no_credentials`）拦截正确；`POST /api/voice/tts` **真实调用微软 Edge TTS**：英音 31,968 B / 美音 46,656 B / 中文 50,976 B，均 `audio/mpeg` 且 MP3 帧头正确；空文本 400；`provider: deepseek` 的每轮精批复用同一 Key 并命中配置的 `/chat/completions` 中转；`ACCESS_CODE` 模式用服务端 `DEEPSEEK_API_KEY` 且错口令 401；MCP 报 `2.2.0`、7 工具、`create_lesson` 正常、`save_turn_feedback` 带 `turnIndex` 等多余字段仍成功写回 |
+| Edge TTS 限流回退 | 真实调用（实现期间与复跑中观察） | 微软偶发 429 时路由返回 503 JSON，前端按设计回退 `speechSynthesis`；间隔 1.2 秒复跑 3 种音色均成功 |
+| `git diff --check` | 干净工作树检查 | exit 0（已修掉 `styles.css` 末尾多余空行） |
+| 文本编码 / 换行 | 字节级检查 | 所有交付文本 UTF-8 无 BOM；新增 `.ts/.md/.json` LF；`.bat` CRLF / `.sh` LF（`.gitattributes` 固化） |
+
+**本轮由 lead 直接补的收尾项**：修掉 `styles.css` EOF 多余空行；`Dockerfile` / `render.yaml`
+版本注释统一到 v2.2.0 并注明 `@andresaya/edge-tts` 随 `node_modules` 打包、无需系统级 TTS 依赖；
+README 增加依赖许可提示（`@andresaya/edge-tts` 为 GPL-3.0-only，二次分发需评估）。
+
+**仍未验证**：真实 DeepSeek / 百炼 / Gemini / OpenAI Key、真实浏览器 SpeechRecognition 与真麦克风、
+真机 Safari / Android 的 TTS 解锁、`docker build` 与云平台部署（同上第三节）。

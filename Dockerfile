@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-#  IELTS Speaking Coach v2.1.0 — build stage
+#  IELTS Speaking Coach v2.2.0 — build stage
 # ---------------------------------------------------------------------------
 FROM node:20-alpine AS build
 WORKDIR /app
@@ -25,7 +25,7 @@ COPY ielts-mcp.bat ielts-mcp.sh ./
 RUN npm run build
 
 # ---------------------------------------------------------------------------
-#  IELTS Speaking Coach v2.1.0 — runtime stage
+#  IELTS Speaking Coach v2.2.0 — runtime stage
 #  The container path is the MCP Streamable HTTP endpoint: POST/GET /mcp
 #  (same port as the web app). The stdio wrappers + scripts/ + skills/ are
 #  copied too, so the same image can also be used by a local MCP client.
@@ -44,6 +44,7 @@ COPY --from=build /app/server ./server
 COPY --from=build /app/web/dist ./web/dist
 
 # v2.1.0: MCP + Skill assets (used by external AI tools; harmless in HTTP mode).
+# v2.2.0: DeepSeek 纯语音依赖 @andresaya/edge-tts 已在 node_modules 中，无需额外的系统级 TTS 依赖；
 COPY --from=build /app/skills ./skills
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/ielts-mcp.bat /app/ielts-mcp.sh ./

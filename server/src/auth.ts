@@ -53,6 +53,9 @@ export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
 export const DEEPSEEK_MODEL = 'deepseek-chat';
 
 const ENV_KEY: Record<Provider, string> = {
+  // v2.2.0 DeepSeek pure-voice mode: the same key powers streamed text turns,
+  // per-turn review and the end-of-lesson report (Edge TTS needs no key).
+  deepseek: 'DEEPSEEK_API_KEY',
   qwen: 'DASHSCOPE_API_KEY',
   gemini: 'GEMINI_API_KEY',
   openai: 'OPENAI_API_KEY',
@@ -64,12 +67,12 @@ function envKey(provider: Provider): string {
   return primary;
 }
 
-export function serverProviders(): Record<Provider | 'deepseek', boolean> {
+export function serverProviders(): Record<Provider, boolean> {
   return {
+    deepseek: Boolean(envKey('deepseek')),
     qwen: Boolean(envKey('qwen')),
     gemini: Boolean(envKey('gemini')),
     openai: Boolean(envKey('openai')),
-    deepseek: Boolean((process.env.DEEPSEEK_API_KEY || '').trim()),
   };
 }
 
@@ -99,6 +102,7 @@ export function resolveCredential(input: CredentialInput): ResolvedCredential {
     throw new AuthError(
       'no_credentials',
       '没有可用的 API Key：请在设置里填写自己的 Key，或让站长配置访问口令。',
+      401,
     );
   }
   if (!accessCodeRequired()) {
@@ -115,6 +119,10 @@ export function resolveCredential(input: CredentialInput): ResolvedCredential {
 }
 
 function providerCoachDefault(provider: Provider): CoachConfig {
+  if (provider === 'deepseek') {
+    // Pure-voice mode: text review/report reuse the very same DeepSeek key.
+    return { baseUrl: DEEPSEEK_BASE_URL, model: DEEPSEEK_MODEL, apiKey: '' };
+  }
   if (provider === 'qwen') {
     return {
       baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',

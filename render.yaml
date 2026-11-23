@@ -15,7 +15,7 @@ services:
         sync: false
       - key: DEEPSEEK_API_KEY
         sync: false
-      # v2.1.0：MCP 远程接入（务必设置，AI 工具用 Authorization: Bearer <MCP_TOKEN>）
+      # v2.2.0：MCP 远程接入（务必设置，AI 工具用 Authorization: Bearer <MCP_TOKEN>）
       - key: MCP_TOKEN
         sync: false
       # 公网部署建议开启多用户隔离，朋友的数据只留在各自浏览器

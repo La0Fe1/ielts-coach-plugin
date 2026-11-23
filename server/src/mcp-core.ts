@@ -286,7 +286,7 @@ function mapCustomQuestions(custom: string[]): PlanQuestion[] {
 // ---------------------------------------------------------------------------
 
 export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer {
-  const server = new McpServer({ name: 'ielts-speaking-coach', version: '2.1.0' });
+  const server = new McpServer({ name: 'ielts-speaking-coach', version: '2.2.0' });
 
   server.tool(
     'get_learner_context',
@@ -375,8 +375,11 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
     'Write per-turn correction cards (grammar fixes + Band 8 upgrades) back into a lesson.',
     {
       lessonId: z.string().min(1),
+      // Plain z.object (not strictObject): external LLMs (豆包 / Codex / dsh) often
+      // add harmless extra fields such as `turnIndex`; stripping them beats
+      // rejecting the whole write-back and losing the learner's review.
       items: z
-        .array(z.strictObject({ lineId: z.string().min(1), feedback: turnFeedbackSchema }))
+        .array(z.object({ lineId: z.string().min(1), feedback: turnFeedbackSchema }))
         .min(1),
     },
     async (args) => {
