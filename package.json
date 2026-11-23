@@ -1,0 +1,18 @@
+{
+  "name": "ielts-coach-v2",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["shared", "server", "web"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm -w @ielts/server run dev\" \"npm -w @ielts/web run dev\"",
+    "build": "npm -w @ielts/web run build && npm -w @ielts/server run build",
+    "start": "npm -w @ielts/server run start",
+    "typecheck": "npm -w @ielts/shared run typecheck && npm -w @ielts/server run typecheck && npm -w @ielts/web run typecheck",
+    "test": "npm -w @ielts/server run test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

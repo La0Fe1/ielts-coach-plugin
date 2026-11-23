@@ -1,0 +1,6 @@
+{
+  "name": "ielts-coach-v2",
+  "buildCommand": "npm install && npm run build",
+  "startCommand": "npm exec tsx -- server/src/index.ts",
+  "port": 3000
+}

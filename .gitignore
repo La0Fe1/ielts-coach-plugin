@@ -1,40 +1,15 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-.pytest_cache/
-build/
+node_modules/
 dist/
-
-# Frontend
-web_src/node_modules/
-web_src/dist/
-editors/vscode/node_modules/
-editors/vscode/dist/
-*.vsix
-
-# Local data
-*.db
-*.db-wal
-*.db-shm
-logs/
-.models/
-_archive/
-
-# Scratch artifacts from local verification
-scripts/_*.log
-scripts/_*.out
-scripts/_*.err
-*.zip
-
-# OS
+.env
+.env.local
+*.log
 .DS_Store
-Thumbs.db
-
-# Bundled speech models: built locally by scripts/prepare_models.py
+venv/
+.venv/
+__pycache__/
+*.pyc
+build/
 models/
-prepare_models.log
-build_portable.log
-models-large/
-ielts-speaking-studio-*.zip
+legacy-v1/
+coverage/
+.vite/

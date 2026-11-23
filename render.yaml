@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ielts-coach
+    runtime: docker
+    plan: free
+    envVars:
+      - key: ACCESS_CODE
+        sync: false
+      - key: DASHSCOPE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false

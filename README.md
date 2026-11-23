@@ -1,96 +1,79 @@
-# 雅思口语教练
+# IELTS 口语教练 · 实时语音版（v2.0）
 
-练雅思口语的桌面窗口。你说英文，它出题、纠错、记错题。
+打开网页就能练雅思口语：**像打电话一样对话**，考官实时听、实时接话，你可以随时打断。
+语法纠错和升级表达在后台安静生成，不打断你开口。
 
-- 装在自己电脑上，不用装 Python
-- 声音和评分在本机，断网也能用
-- 老师是你电脑里的 AI（豆包 / Cursor / dsh），换个更强的就教得更好
-- 说完停一下，它自己判断你说完没有；卡住会给你词
+- 手机 / iPad / 电脑浏览器都能用，可「添加到主屏幕」当 App
+- 麦克风、字幕、打断都在本地页面完成，语音走你配置的服务商
+- 两种用法：**自己填 API Key**（只存在你自己的浏览器）或 **用朋友分享的访问口令**
 
-![课堂](docs/v2-chat.png)
+---
 
-## 下载
+## 一、最快：3 分钟部署给朋友用（推荐）
 
-**只有一种推荐路径**，机器上不需要装 Python：
+部署到任意支持 Docker 的云（Render / Zeabur / 自己的服务器）：
 
-1. 打开 [Releases](https://github.com/La0Fe1/ielts-coach-plugin/releases)
-2. 把这三个文件下到同一个文件夹：
-   - `IELTS-Coach-full.zip.001`
-   - `IELTS-Coach-full.zip.002`
-   - `merge-and-extract.bat`（合并并解压的那个 bat）
-3. 双击 `merge-and-extract.bat`（用的是 Windows 自带的 `tar`，不用装 7-Zip）
-4. 双击 `连接我的AI工具.bat` —— 自动把教练接进 Cursor / Claude Code / dsh，并装好技能；用豆包的话它会打印两步配置
-5. 在你的 AI 工具里说「开始练雅思 Part 1」，窗口自动弹出
+1. Fork 或上传本仓库
+2. 新建 Web Service（Docker），环境变量按需填：
+   - ACCESS_CODE=ielts2026（朋友输入这个口令就能用你的额度）
+   - DASHSCOPE_API_KEY=sk-...（阿里云百炼，国内直连，推荐）
+   - 或 GEMINI_API_KEY=... / OPENAI_API_KEY=...
+3. 部署完把网址发给朋友，他在设置里输入口令即可开麦
 
-> Release 里还有一个轻量单文件包 `IELTS-Coach-portable-win64.zip`（1.4 GB，识别模型小一号）。
-> 只想快点看看长什么样，用那个；正常用上面那三个文件。
+> 只填 Key 不填 ACCESS_CODE 时，只能用户自带 Key（BYOK）。
 
-## 怎么用
+一键部署文件已经准备好：Dockerfile、docker-compose.yml、render.yaml、zeabur.json、.env.example。
 
-1. 在 dsh / Cursor / VS Code / Claude Code 里说「开始练雅思 Part 1」
-2. 桌面弹出窗口，点一次「开始语音连麦上课」，允许麦克风
-3. 考官用英文提问，你回答；**说完点「我说完了」**，说到一半卡住 2 秒会给提示词
-4. 说「结束本课」出四维报告；下次上课先复习上次错的地方
+## 二、本地跑起来
 
-## 支持的工具
+装好 Node.js LTS（https://nodejs.org/zh-cn ，20 以上），然后：
 
-| 工具 | 怎么接 |
-| :--- | :--- |
-| dsh / Claude Code | MCP + SKILL，说「开始上课」 |
-| Cursor / VS Code / Windsurf | 同上 + 扩展（状态栏 🎤、命令面板 `IELTS: 打开口语教练面板`） |
-| 任何 MCP 客户端 | `ielts-mcp`，调 `start_lesson` |
+- Windows：双击 start-local.bat
+- Mac / Linux：./start-local.sh
 
-## 在豆包工作里用
+浏览器打开 http://localhost:3000 → 设置里填 Key 或口令 → 开始连麦。
 
-豆包工作的「插件」支持**本地 STDIO MCP**，「技能」直接吃 `SKILL.md`：
+想用手机试：在电脑上执行
 
-1. 左侧 **插件·技能·伙伴 → 插件 → + 添加 → 新建自定义连接器**
-   - 传输类型：**STDIO**
-   - 运行命令（便携版）：`<安装目录>\ielts-mcp.bat`
-   - 运行命令（源码版）：`<仓库>\.venv\Scripts\ielts-mcp.exe`
-   - 环境变量：`PYTHONUTF8` = `1`
-2. **技能 → + 添加 → 上传技能**，选 `skills/ielts-speaking-coach/` 文件夹
-3. 在豆包里说「开始练雅思 Part 1」
+    npx cloudflared tunnel --url http://localhost:3000
 
-如果客户端只支持 HTTP 连接器：填 **`http://127.0.0.1:8765/mcp`**（daemon 自带这个端点，不用额外进程）。
+把生成的 https 链接在手机上打开即可（临时链接，关掉就失效）。
 
-## 本机跑什么
+## 三、支持哪些语音服务商
 
-- 语音识别 faster-whisper（便携包内置 `small.en`）
-- 发音评分 wav2vec2 + GOP，音素级，单词标绿 / 黄 / 红
-- 断句 Silero VAD；朗读 edge-tts（联网，更自然）或本地 Kokoro（离线）
-- 题库 283 题；长期记忆存 SQLite
+| 服务商 | 适用 | 说明 |
+| --- | --- | --- |
+| 阿里云百炼 Qwen-Omni-Realtime | 国内 | 延迟低、中文支持好，推荐国内用户 |
+| Google Gemini Live | 海外 | 音色自然，需要能访问 Google |
+| OpenAI Realtime | 海外 / 中转 | 支持自定义 endpoint，兼容 OneAPI/NewAPI |
 
-音频只发往 `127.0.0.1:8765`，不上传任何服务器。数据目录 `~/.ielts-coach`，删掉即清空记忆。
+设置里可以填**自定义 endpoint**，用中转站或 Cloudflare Worker 反代都行。
 
-## 从源码跑
+## 四、怎么用（练的时候）
 
-```bash
-git clone https://github.com/La0Fe1/ielts-coach-plugin
-cd ielts-coach-plugin
+- **自由通关**：随时开口就能打断考官；外放时考官说话会自动闭麦，点「打断」即可插话。
+- **手动控场**：说完点「我说完了」再提交，适合嘈杂环境。
+- **Part 2**：自动切手动模式，60 秒准备（不开麦）+ 2 分钟独白，绝不打断你。
+- **字幕**：双方逐字滚动；可以开「盲听」练听力。
+- **精批**：每说完一句，右侧（手机上是底部抽屉）出现 ✨ 精批：修正、Band 8 升级句、错因。
+- **报告**：结束后生成四维评分 + Top 错题 + 可背诵的升级句，存进浏览器本地，可导出 JSON。
 
-# Windows
-powershell -ExecutionPolicy Bypass -File setup.ps1
+## 五、隐私
 
-# macOS / Linux
-bash setup.sh
-```
+- 自带 Key 只存在你浏览器的 localStorage，服务端**不落盘、不打日志**。
+- 站长模式下 Key 只在服务器内存里用于建立连接，前端拿不到。
+- 课程记录只存在你自己的浏览器（IndexedDB），换设备不会自动同步。
 
-需要 Python 3.11+。
+## 六、开发
 
-## 开发
+    npm install
+    npm run dev        # 前端 5173 + 网关 3000
+    npm run typecheck
+    npm test
+    npm run build && npm start
 
-```bash
-pytest tests -q                                  # 64 个测试
-cd web_src && npm run build                      # 构建界面
-python -m desktop.app                            # 直接开桌面窗口
-python scripts/build_portable.py --with-models   # 打便携包
-```
+目录：shared/（协议与雅思 Prompt）、server/（网关与三家适配器）、web/（React PWA）。
 
-## 已知限制
+## 七、旧版本
 
-- 便携版只有 Windows x64；macOS / Linux 走源码方式
-- 需要 WebView2（Win10/11 自带，老系统要装 Runtime）
-- 完整版 3.2 GB，因为 GitHub 单文件上限 2 GB 才拆成两卷
-- 只支持英文口语
-- **考官的智力取决于你 agent 的模型**：模型弱，纠错也会弱
+v1（本地 Python / Whisper / 桌面窗口）保留在分支 archive/v1-local-python，不再维护。
