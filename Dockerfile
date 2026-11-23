@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-#  IELTS Speaking Coach v2.2.0 — build stage
+#  IELTS Speaking Coach v2.2.5 — build stage
 # ---------------------------------------------------------------------------
 FROM node:20-alpine AS build
 WORKDIR /app
@@ -25,7 +25,7 @@ COPY ielts-mcp.bat ielts-mcp.sh ./
 RUN npm run build
 
 # ---------------------------------------------------------------------------
-#  IELTS Speaking Coach v2.2.0 — runtime stage
+#  IELTS Speaking Coach v2.2.5 — runtime stage
 #  The container path is the MCP Streamable HTTP endpoint: POST/GET /mcp
 #  (same port as the web app). The stdio wrappers + scripts/ + skills/ are
 #  copied too, so the same image can also be used by a local MCP client.

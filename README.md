@@ -1,4 +1,4 @@
-# IELTS 口语教练 · 实时语音 + 全生态 MCP（v2.2.4）
+# IELTS 口语教练 · 实时语音 + 全生态 MCP（v2.2.5）
 
 打开网页就能练雅思口语：**像打电话一样和考官对话**，实时听、实时接话，随时可以打断；
 语法纠错和升级表达在后台安静生成，不打断你开口。
@@ -19,17 +19,19 @@ OpenAI Codex CLI / Claude Code / Cursor，通过 **MCP + Skill**）：
 
 ---
 
-## 📌 版本状态：已封版（v2.2.4，2026-11-23）
+## 📌 版本状态：已封版（v2.2.5 安全补丁，2026-11-23）
 
-本项目**暂时封版**：`main` 最新版本为 **v2.2.4**，封版前的全部代码、测试与文档均已提交并推送到 GitHub；
+本项目**暂时封版**：`main` 最新版本为 **v2.2.5**（在 v2.2.4 基础上打了 Key 安全补丁），封版前的全部代码、测试与文档均已提交并推送到 GitHub；
 封版后不再自动迭代。
 
-- 发布页：https://github.com/La0Fe1/ielts-coach-plugin/releases/tag/v2.2.4
+- 发布页：https://github.com/La0Fe1/ielts-coach-plugin/releases/tag/v2.2.5
 - 封版标记 tag：`freeze-2026-11-23`
-- 完整验收记录：[docs/V2_DELIVERY.md](docs/V2_DELIVERY.md) · 逐版本变更：[docs/RELEASE_NOTES_v2.2.4.md](docs/RELEASE_NOTES_v2.2.4.md)
+- 完整验收记录：[docs/V2_DELIVERY.md](docs/V2_DELIVERY.md) · 逐版本变更：[docs/RELEASE_NOTES_v2.2.5.md](docs/RELEASE_NOTES_v2.2.5.md)
 
-**封版验收**：`npm run typecheck` / `npm run build` / `npm test` 全绿（9 个测试文件 / 93 项），
+**封版验收**：`npm run typecheck` / `npm run build` / `npm test` 全绿（10 个测试文件 / 98 项），
 真实进程 E2E、真实微软 Edge TTS、无头浏览器音频链路均已实测通过。
+**安全（v2.2.5）**：服务端 Key 禁止被转发到自定义中转地址；`start-local` 本地启动默认只监听
+`127.0.0.1`（同一 Wi-Fi 的其他人打不开），启动日志会打印 Key 来源 / 口令 / 多用户 / 监听地址。
 **未实测（如实标注）**：真实百炼 / Gemini / OpenAI / DeepSeek Key 的实际通话质量、真机 iPhone / Android、
 `docker build` 与云平台部署。
 
@@ -61,7 +63,7 @@ npm run dev                      # 前端 5173 + 网关 3000
 通话中想用中文提问，点顶部 `🎤 识别：英文 / 中文` 切换；识别不可用（国内 Chrome 常见）就用底部
 自动展开的打字输入框继续，流程不会卡死。
 
-健康检查：`curl http://localhost:3000/health` 应返回 `version: "2.2.4"`。
+健康检查：`curl http://localhost:3000/health` 应返回 `version: "2.2.5"`。
 
 想用手机试：在电脑上执行 `npx cloudflared tunnel --url http://localhost:3000`，手机打开生成的
 https 链接即可（临时链接，关掉就失效；非 HTTPS 的局域网 IP 会被浏览器拒绝使用麦克风）。
@@ -311,10 +313,12 @@ docker compose up -d --build
 | `IELTS_COACH_DATA_DIR` | 共享数据目录，默认 `~/.ielts-coach`。**云端请指向持久卷**（如 `/data`），否则重启丢课程 |
 | `PUBLIC_BASE_URL` | `create_lesson` 返回的网页地址前缀，云端填 `https://你的域名` |
 | `PORT` | 服务端口，默认 `3000` |
+| `HOST` | 监听地址，默认 `0.0.0.0`（云端 / Docker 必须）。本地双击 `start-local` 会自动设 `127.0.0.1`，只有本机能访问；要手机 / 局域网共用才设 `0.0.0.0` |
 
 DeepSeek 纯语音模式**不需要新增环境变量**：文本调用复用 `DEEPSEEK_API_KEY`，朗读走微软 Edge
 Neural TTS（免费、无需 Key），浏览器语音识别在客户端完成。要用中转站，在网页设置的高级选项里
-填自定义 endpoint 即可，不用改服务端配置。
+填自定义 endpoint 即可，不用改服务端配置；**v2.2.5 起：服务端 Key 一律只走官方地址，自定义中转
+只对「浏览器自带 Key」生效**，防止知道口令的人把你的 Key 转发到自己的服务器。
 
 - **多用户隔离（`MULTI_USER_MODE=true`）**：公网普通访客的课程只留在自己浏览器 IndexedDB，
   不会写进服务端共享 `store.json`；课程列表 / 长期记忆接口需要 `MCP_TOKEN`；单节课仍可通过
@@ -323,7 +327,15 @@ Neural TTS（免费、无需 Key），浏览器语音识别在客户端完成。
   `https://你的域名/mcp` + `Authorization: Bearer $MCP_TOKEN`，客户端机器不需要装 Node.js。
   这也是推荐给朋友用的方式。
 - **安全清单**：设 `MCP_TOKEN`、`ACCESS_CODE` 别用弱口令、数据目录挂持久卷、按需设
-  `MULTI_USER_MODE=true`。
+  `MULTI_USER_MODE=true`；**不想让别人用你的 Key，就不要在 .env 放 Key**（服务端 Key 必须配
+  `ACCESS_CODE` 才可用，知道口令的人才能用你的额度）。
+- **本地只监听本机（v2.2.5）**：双击 `start-local.bat` / `./start-local.sh` 启动时默认
+  `HOST=127.0.0.1`，同一 Wi-Fi 的其他人打不开这个网页，也就不可能借用你的 Key；
+  手机 / 局域网共用请用 cloudflared 等 HTTPS 隧道（隧道连的是本机端口，仍然安全），
+  或显式设置 `HOST=0.0.0.0` 并自行承担风险。
+- **服务端 Key 不外发（v2.2.5）**：ACCESS_CODE 模式下，`/api/voice/deepseek-turn`、实时语音
+  WebSocket、DeepSeek 精批都不会把服务端 Key 发到客户端指定的中转地址；只有浏览器自带的 Key
+  才允许自定义 endpoint。
 - **TTS 端点注意**：`POST /api/voice/tts` 是给网页调用的免费朗读接口（无需 Key、不依赖用户凭证）。
   公网长期开放时，别人也可能直接拿它当免费 TTS 代理（微软侧会限流），介意的话可在反向代理 / CDN
   层对该路径做同源或频率限制，或只在需要 DeepSeek 纯语音时开放。
@@ -422,7 +434,7 @@ node node_modules/tsx/dist/cli.mjs server/src/mcp-stdio.ts   # 手工跑 STDIO�
 ```
 
 交付与验证记录见 `docs/V2_DELIVERY.md`（含 v2.2.0 的本机实测证据与未实测清单），
-本版变更见 `docs/RELEASE_NOTES_v2.2.4.md`（v2.2.0 特性见 `docs/RELEASE_NOTES_v2.2.0.md`）。
+本版变更见 `docs/RELEASE_NOTES_v2.2.5.md`（v2.2.0 特性见 `docs/RELEASE_NOTES_v2.2.0.md`）。
 
 **依赖许可提示**：本项目自身为 MIT；DeepSeek 纯语音的朗读依赖
 [`@andresaya/edge-tts`](https://github.com/andresayac/edge-tts) 为 **GPL-3.0-only**

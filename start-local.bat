@@ -18,6 +18,9 @@ if not exist web\dist\index.html (
   echo 正在构建前端...
   call npm run build
 )
+rem v2.2.5：本地启动默认只监听 127.0.0.1 —— 同一 Wi-Fi 下的其他人打不开这个网页，也就借不到你的 Key。
+rem 想让手机 / 局域网共用：把这行改成 set "HOST=0.0.0.0"（手机浏览器开麦克风还需要 HTTPS 隧道）。
+if not defined HOST set "HOST=127.0.0.1"
 echo.
 echo 网页练习： http://localhost:3000
 echo MCP 端点： http://localhost:3000/mcp   （豆包 / dsh / Codex 等 AI 工具接入用）

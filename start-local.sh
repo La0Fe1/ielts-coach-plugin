@@ -7,6 +7,8 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 [ -d node_modules ] || npm install --no-audit --no-fund
 [ -f web/dist/index.html ] || npm run build
+# v2.2.5：本地启动默认只监听 127.0.0.1，同一 Wi-Fi 下的其他人打不开；手机共用时改成 HOST=0.0.0.0
+export HOST="${HOST:-127.0.0.1}"
 echo ""
 echo "网页练习： http://localhost:3000"
 echo "MCP 端点： http://localhost:3000/mcp  （豆包 / dsh / Codex 等 AI 工具接入用）"

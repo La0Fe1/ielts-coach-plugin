@@ -30,6 +30,7 @@ import { streamDeepSeekTurn, synthesizeSpeech } from './deepseek-voice';
 import { allowMcpRequest, isLoopback, mcpToken } from './mcp-core';
 import { mountMcp } from './mcp-http';
 import {
+  dataDir,
   deleteMemory,
   getLesson,
   listLessons,
@@ -39,8 +40,10 @@ import {
   upsertMemory,
 } from './store';
 
-const APP_VERSION = '2.2.4';
+const APP_VERSION = '2.2.5';
 const PORT = Number(process.env.PORT || 3000);
+/** v2.2.5: bind address. Cloud/Docker keeps 0.0.0.0; local launchers set 127.0.0.1. */
+const HOST = (process.env.HOST || '').trim() || '0.0.0.0';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webDist = path.resolve(here, '../../web/dist');
 
@@ -348,18 +351,26 @@ app.post('/api/voice/deepseek-turn', async (req, res) => {
     return;
   }
   let apiKey = '';
+  let credentialSource: 'byok' | 'server' = 'byok';
   try {
-    apiKey = resolveCredential({
+    const credential = resolveCredential({
       provider: 'deepseek',
       apiKey: input.apiKey,
       accessCode: input.accessCode,
-    }).apiKey;
+    });
+    apiKey = credential.apiKey;
+    credentialSource = credential.source;
   } catch (error) {
     coachError(res, error);
     return;
   }
+  // v2.2.5: the deployment's own key is never sent to a client-supplied relay.
+  const endpointUrl = endpointForCredential(credentialSource, input.endpointUrl);
+  if (input.endpointUrl && !endpointUrl) {
+    console.warn('[ielts-v2] 已忽略自定义 endpointUrl：服务端 Key 只允许官方地址');
+  }
   try {
-    await streamDeepSeekTurn({ ...input, apiKey }, req, res);
+    await streamDeepSeekTurn({ ...input, endpointUrl, apiKey }, req, res);
   } catch (error) {
     // streamDeepSeekTurn reports its own failures as SSE `error` frames; this
     // only catches truly unexpected wiring errors.
@@ -415,6 +426,19 @@ app.get('*', (_req, res) => {
     if (error) res.status(404).json({ error: 'web build missing: run npm run build' });
   });
 });
+
+/**
+ * v2.2.5 security: a credential that belongs to the deployment (ACCESS_CODE /
+ * server-side .env key) must never be sent to a client-chosen endpoint, or an
+ * access-code holder could redirect the owner's key to their own server.
+ * Only browser-provided (BYOK) keys may use a custom relay / endpoint.
+ */
+export function endpointForCredential(
+  source: 'byok' | 'server',
+  endpointUrl: string | undefined,
+): string | undefined {
+  return source === 'byok' ? endpointUrl : undefined;
+}
 
 export function createGateway(): { app: express.Express; server: http.Server; wss: WebSocketServer } {
   const server = http.createServer(app);
@@ -487,12 +511,15 @@ wss.on('connection', (ws: WebSocket) => {
         // Adapters exist only for qwen / gemini / openai (deepseek is HTTP SSE).
         const realtimeProvider = provider as StartSettings['provider'];
         let apiKey = '';
+        let credentialSource: 'byok' | 'server' = 'byok';
         try {
-          apiKey = resolveCredential({
+          const credential = resolveCredential({
             provider,
             apiKey: event.apiKey,
             accessCode: event.accessCode,
-          }).apiKey;
+          });
+          apiKey = credential.apiKey;
+          credentialSource = credential.source;
         } catch (error) {
           const authError = error as AuthError;
           sendJson(ws, {
@@ -507,7 +534,7 @@ wss.on('connection', (ws: WebSocket) => {
           provider: realtimeProvider,
           model: event.model,
           voice: event.voice,
-          endpointUrl: event.endpointUrl,
+          endpointUrl: endpointForCredential(credentialSource, event.endpointUrl),
           workspaceId: event.workspaceId,
           apiKey,
           systemPrompt: event.systemPrompt,
@@ -572,14 +599,28 @@ const isDirectRun = (() => {
 
 if (isDirectRun) {
   const { server } = createGateway();
-  server.listen(PORT, () => {
+  server.listen(PORT, HOST, () => {
     const providers = serverProviders();
     const enabled = Object.entries(providers)
       .filter(([, on]) => on)
       .map(([name]) => name)
       .join(', ') || 'none (BYOK only)';
-    console.log('[ielts-v2] listening on http://localhost:' + PORT);
-    console.log('[ielts-v2] server-side keys: ' + enabled);
-    if (accessCodeRequired()) console.log('[ielts-v2] ACCESS_CODE 已启用');
+    const bindScope =
+      HOST === '0.0.0.0' || HOST === '::'
+        ? 'all interfaces (LAN / internet reachable)'
+        : HOST + ' (local only)';
+    console.log('[ielts-v2] listening on http://localhost:' + PORT + ' | bind=' + bindScope);
+    console.log('[ielts-v2] keys: browser BYOK + server env: ' + enabled);
+    if (accessCodeRequired()) {
+      console.log('[ielts-v2] ACCESS_CODE 已启用：知道口令的人可以使用服务端 Key，请勿分享给不认识的人');
+    } else {
+      console.log('[ielts-v2] 未设置 ACCESS_CODE：服务端 Key 不对外开放，只有浏览器自带的 Key 可用');
+    }
+    console.log(
+      '[ielts-v2] MULTI_USER_MODE=' + (isMultiUserMode() ? 'true' : 'false') +
+        ' | MCP_TOKEN=' + (mcpToken() ? '已设置' : '未设置（/mcp 仅本机）') +
+        ' | data dir=' + dataDir(),
+    );
+    console.log('[ielts-v2] 服务端 Key 只来自 .env，不会写入磁盘、日志或 API 响应');
   });
 }

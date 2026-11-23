@@ -424,3 +424,43 @@ v2.2.3 修复了 Edge TTS 429 限流的根因后，用户仍反馈「还是没�
 **v2.2.4 已封版**：`main` 最新提交即封版提交，封版标记 tag 为 `freeze-2026-11-23`；
 GitHub Release：https://github.com/La0Fe1/ielts-coach-plugin/releases/tag/v2.2.4 。
 本文件记录的是封版前 lead 的最终复跑结果；未实测项均已在各版本文档中如实标注。
+
+---
+
+# v2.2.5 安全补丁记录（Key 隔离 + 本地监听，2026-11-23）
+
+## 一、背景
+
+用户询问：「有没有做本地适配，别到时候别人用的是我的 apikey」。核查结论：
+Key 本身只存浏览器 localStorage / 服务端 .env（从未提交），但发现两处可被「知道口令的人」利用的缺口：
+
+1. 服务端 Key（ACCESS_CODE 模式）会被发送到客户端指定的 `endpointUrl`（DeepSeek 纯语音轮）或
+   `coachBaseUrl`（DeepSeek 精批），可被转发窃取；
+2. 服务默认监听 `0.0.0.0`，同一 Wi-Fi 的其他人可以打开页面（用不了浏览器里的 Key，但可白嫖 TTS）。
+
+## 二、修复
+
+1. `server/src/index.ts`：新增并导出 `endpointForCredential(source, endpointUrl)` —— 只有
+   `byok` 凭证允许自定义 endpoint，`server` 凭证一律返回 `undefined`；HTTP SSE 语音轮与 WebSocket
+   实时语音都改用它，并在忽略自定义地址时打一条 warn。
+2. `server/src/auth.ts`：`deepseekCoachConfig` 使用服务端 `DEEPSEEK_API_KEY` 时强制
+   `DEEPSEEK_BASE_URL` + `DEEPSEEK_MODEL`，忽略客户端 `coachBaseUrl`/`coachModel`。
+3. `HOST` 环境变量：默认 `0.0.0.0`；`start-local.bat`/`start-local.sh` 自动设置
+   `HOST=127.0.0.1`；`.env.example` 增加说明。
+4. 启动日志打印监听地址、Key 来源、ACCESS_CODE / MULTI_USER_MODE / MCP_TOKEN 状态与数据目录
+   （仅布尔/文本状态，绝不打印 Key）。
+5. 版本统一 `2.2.5`（4 个 package.json + lock 5 处 + APP_VERSION + MCP server version + 测试断言）。
+
+## 三、验收（lead 复跑）
+
+| 项目 | 结果 |
+| --- | --- |
+| 类型检查 | `npm run typecheck` → exit 0 |
+| 自动化测试 | `npm test` → **10 个测试文件 / 98 项全绿**（新增 security 5 项；deepseek-voice 的 host-key 测试改为断言「自定义中转被忽略、只请求官方地址」） |
+| 生产构建 | `npm run build` → exit 0（前端 45 模块，bundle 未变；server tsc 通过） |
+| 启动日志 | 本机以 `HOST=127.0.0.1` 启动 → 日志显示 `bind=127.0.0.1 (local only)`、`未设置 ACCESS_CODE`、`MULTI_USER_MODE=false`、`MCP_TOKEN=未设置` |
+| Key 扫描 | 全部 tracked 文件无 key-like 字符串；`.env` 从未被 Git 跟踪；`store.json` 无 apiKey 字段 |
+| 外部设备验证 | **未实测**：另一台设备/公网访问 127.0.0.1 应失败（依赖 Node 绑定语义 + 启动日志确认） |
+
+**封版状态**：v2.2.5 为新的封版版本，`freeze-2026-11-23` 标记更新到 v2.2.5 提交；
+v2.2.4 的 Release 顶部已标注「已被 v2.2.5 安全补丁取代」。

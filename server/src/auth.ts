@@ -210,7 +210,9 @@ function deepseekCoachConfig(input: CoachCredentialInput): CoachConfig {
       401,
     );
   }
-  return { baseUrl, model, apiKey: serverKey };
+  // v2.2.5: the deployment's own DeepSeek key only ever goes to the official
+  // endpoint — a learner-supplied coachBaseUrl must never receive it.
+  return { baseUrl: DEEPSEEK_BASE_URL, model: DEEPSEEK_MODEL, apiKey: serverKey };
 }
 
 function customCoachConfig(input: CoachCredentialInput): CoachConfig {

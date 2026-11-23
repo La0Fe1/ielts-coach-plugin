@@ -283,13 +283,34 @@ describe('POST /api/voice/deepseek-turn: streaming', () => {
     ]);
   });
 
-  it('uses the host DEEPSEEK_API_KEY when the access code matches', async () => {
+  it('uses the host DEEPSEEK_API_KEY with the official endpoint and ignores a client relay (v2.2.5)', async () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'sk-host-deepseek');
     vi.stubEnv('ACCESS_CODE', 'ielts2026');
     vi.stubEnv('ALLOW_PUBLIC_HOST_KEY', '');
     const upstream = await fakeSseUpstream();
     const gateway = await startGateway();
     cleanups.push(gateway.close, upstream.close);
+
+    // v2.2.5: the deployment key may only reach the official DeepSeek endpoint.
+    const realFetch = globalThis.fetch.bind(globalThis);
+    const captured: Array<{ url: string; authorization: string }> = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input: any, init?: any) => {
+      const target =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : String(input?.url || '');
+      if (target.startsWith('https://api.deepseek.com/')) {
+        captured.push({
+          url: target,
+          authorization: new Headers(init?.headers).get('authorization') || '',
+        });
+        return new Response('data: {"choices":[{"delta":{"content":"Hello there"}}]}\n\ndata: [DONE]\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      return realFetch(input, init);
+    }) as typeof fetch);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    cleanups.push(() => fetchSpy.mockRestore(), () => warnSpy.mockRestore());
 
     const response = await postDeepSeekTurn(gateway.httpUrl, {
       accessCode: 'ielts2026',
@@ -300,7 +321,12 @@ describe('POST /api/voice/deepseek-turn: streaming', () => {
     expect(response.status).toBe(200);
     const frames = parseSseFrames(await response.text());
     expect(frames[frames.length - 1]).toEqual({ type: 'done', text: 'Hello there' });
-    expect(upstream.requests[0].authorization).toBe('Bearer sk-host-deepseek');
+    // The client-chosen relay must never be contacted...
+    expect(upstream.requests).toHaveLength(0);
+    // ...and the host key only goes to the official endpoint.
+    expect(captured).toHaveLength(1);
+    expect(captured[0].url).toBe('https://api.deepseek.com/v1/chat/completions');
+    expect(captured[0].authorization).toBe('Bearer sk-host-deepseek');
   });
 
   it('sends an error frame when the upstream is unreachable', async () => {
