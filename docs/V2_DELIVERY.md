@@ -79,3 +79,95 @@
 
 - 真实厂商 Key 的外网连通与音色（本地假上游验证过协议）。
 - 真机 iPhone Safari / Android 的音频解锁与 PWA 安装。
+
+---
+
+# v2.1.0 交付说明（全生态 MCP 协同，2026-11-23）
+
+## 一、本版范围
+
+1. **全生态 MCP 服务端**：`server/src/mcp-core.ts` 注册 7 个工具
+   （`get_learner_context` / `create_lesson` / `list_lessons` / `get_lesson_transcript` /
+   `save_turn_feedback` / `save_lesson_report` / `upsert_memory`），双传输：
+   - Streamable HTTP：`POST/GET/DELETE /mcp`，与网页同端口（默认 `http://127.0.0.1:3000/mcp`），
+     鉴权 `MCP_TOKEN`（回退 `ACCESS_CODE`）`Authorization: Bearer` 或 `?token=`；未配置 Token 时仅放行本机；
+   - STDIO：`server/src/mcp-stdio.ts`，stdout 只允许 JSON-RPC，诊断全部 stderr。
+2. **共享存储**：`server/src/store.ts` 写 `${IELTS_COACH_DATA_DIR:-~/.ielts-coach}/store.json`
+   （临时文件 + rename 原子落盘）；网页端与 MCP 工具共用，`/?lesson=<id>` 直接载入 AI 定制课表。
+3. **零手动重启**：本机 STDIO 下载 `create_lesson` 会探测 `/health`，网页服务没起则后台拉起
+   （最多 8 秒）再打开浏览器，返回 `{ lessonId, url, serverRunning, browserOpened, plan }`。
+4. **一键接入 + Skill**：`scripts/connect-agent.mjs`（纯 Node >=20、零依赖、幂等、`--dry-run`、
+   `--url`/`--token`/`--home`）适配 DeepSeek Harness / OpenAI Codex CLI / Claude Code + Desktop /
+   Cursor / 豆包桌面端；`skills/ielts-speaking-coach/SKILL.md` 为中文优先双语操作规范；
+   根目录 `连接我的AI工具.bat/.sh` 双击即用。
+5. **免费外部精批模式**：设置里新增「交给外部 AI 工具（豆包 / dsh / Codex）」，通话中不调用网页精批接口，
+   练完由外部 AI 读完整字幕产出逐句红绿 + Band 8 升级 + 四维报告并写回。
+6. **多用户隔离**：`MULTI_USER_MODE=true` 时公网普通访客只写各自浏览器 IndexedDB，不污染共享
+   `store.json`；课程列表 / 记忆接口需要 Token，单节课可由猜不到的 `?lesson=<id>` 深链访问。
+7. **打包**：版本统一 `2.1.0`（root/shared/server/web + package-lock）、Dockerfile 运行时镜像复制
+   `skills/`、`scripts/`、`ielts-mcp.bat/.sh`，compose/render 补齐 `MCP_TOKEN` / `MULTI_USER_MODE` /
+   `IELTS_COACH_DATA_DIR` 等 env plumbing；`.gitignore` 忽略 `*.bak-*` 与 `store.json`。
+
+> v2.0.1 的 4 个细节修复由并行任务在 `web/src`、`server/src` 完成，本文件只记录跨模块验收结果；
+> 细节以 `docs/RELEASE_NOTES_v2.1.0.md` 为准。
+
+## 二、本机已真实验证（2026-11-23，可复现）
+
+| 项目 | 命令 / 方法 | 结果 |
+| --- | --- | --- |
+| 版本号 | `node -e "JSON.parse(...)"` 读取 root/shared/server/web `package.json` + `package-lock.json` | 5 处 version 全部 `2.1.0`；workspace link 与 mcp/zod 依赖条目完好 |
+| 类型检查 | `npm run typecheck` | shared / server / web 依次 `tsc --noEmit` 全部通过，exit 0 |
+| 生产构建 | `npm run build` | web：`tsc --noEmit && vite build` 通过（44 模块，`dist/assets/index-*.js` 208.98 KB / gzip 68.02 KB）；server：`tsc --noEmit` 通过；exit 0 |
+| 自动化测试 | `npm test`（vitest） | 7 个测试文件 / **56 项全部通过**，含 MCP HTTP 全生命周期、STDIO 真实子进程（stdout 无杂音）、`connect-agent --dry-run` 契约 |
+| 一键接入 dry-run 契约 | `node scripts/connect-agent.mjs --dry-run --home <tmp>` | exit 0；stdout 含 `codex` / `cursor` / `豆包` / `dry-run`；tmp home 前后逐文件 hash 不变（未写文件） |
+| 一键接入远程模式 | `node scripts/connect-agent.mjs --dry-run --url https://example.com/mcp --token tok` | exit 0，输出 Streamable HTTP 模式，token 不回显 |
+| 配置合并正确性 | 假 home 预置 dsh/codex/claude/cursor 配置后实跑，再用 Python `yaml.safe_load` / `tomllib` 重解析 | YAML、TOML、JSON 均解析通过；原配置条目与其它 `mcpServers` 键保留；Windows 路径经 YAML 单引号 / TOML 字面量字符串后原样保留；二次运行无新备份、无文件变化（幂等）；坏 JSON 只跳过不覆盖 |
+| 备份 | 实跑统计 | 每个被修改的既有文件生成 `<file>.bak-YYYYMMDD-HHMMSS` |
+| `ielts-mcp.bat` STDIO | 从 `C:\Windows`（任意 cwd）用 `cmd /c` 启动，喂 `initialize` / `tools/list` / `create_lesson` | stdout 3 行全部是合法 JSON-RPC；stderr 仅诊断；7 个工具齐全；`create_lesson` 返回 `lessonId/url/serverRunning/browserOpened/plan`；`IELTS_COACH_DATA_DIR` 透传生效（store.json 写到指定目录） |
+| `ielts-mcp.bat` 缺失依赖 | 复制到无 `node_modules` 的目录启动 | exit 1，stdout 为空，stderr 明确提示缺依赖并让执行 `npm install` |
+| `连接我的AI工具.bat` | `cmd /c` 带 `--dry-run --home <tmp>` 实跑（CRLF + UTF-8 中文） | exit 0，无解析杂音，中文正常输出 |
+| `start-local.bat` | 替换启动命令后 `cmd /c` 解析实测（CRLF） | exit 0，无 `not recognized` 杂音，「网页 / MCP / ?lesson」提示行正常输出 |
+| 静态配置 | Python PyYAML + JSON.parse | `docker-compose.yml`、`render.yaml` 解析通过且含新 env / 持久卷；`Dockerfile` 静态检查含 skills/scripts/wrappers 的 COPY、数据目录与 `/health` healthcheck |
+| 文本编码 | 字节级检查 | `.env.example`、`README.md`、docs、scripts、skill、包装脚本均 UTF-8 **无 BOM**；`.bat` 为 CRLF（Windows 安全），`.sh` 为 LF |
+
+## 三、尚未实测（如实标注）
+
+1. **真实厂商 Key 未实测**：本机没有百炼 / Gemini / OpenAI / DeepSeek 的真实外网 Key，因此真实语音通话、
+   真实音色、打断延迟、真实外部精批质量都没有跑过；协议与转发仍以 v2.0.1 的本地假上游验证为准。
+2. **真实 AI 客户端 GUI 未实测**：豆包桌面端、DeepSeek Harness、Codex CLI、Claude Code/Desktop、Cursor
+   的图形界面安装步骤没有在真机上逐步点过；验证的是脚本产出的配置格式（YAML/TOML/JSON 重新解析）
+   + 本机 STDIO 真实 JSON-RPC。各客户端版本差异可能带来界面文案不同。
+3. **真机 iPhone Safari / Android 未实测**：麦克风解锁、AudioWorklet、PWA 安装仍需真机验证。
+4. **Docker 镜像未在本机构建**：`docker build` 未执行（避免占用大量时间/带宽），Dockerfile 仅做静态检查，
+   镜像运行留待部署时验证。
+5. **macOS / Linux 的 `ielts-mcp.sh` 未在真机运行**：本机无 bash，只做了代码走查（绝对脚本路径、
+   仅 stderr 诊断、缺依赖报错）；建议在目标机执行一次 `bash ielts-mcp.sh` 自查。
+6. **`npm run build`**：并行任务结束后执行通过（vite + tsc 均 0 报错）；lead 在最终合并改动
+   （MCP schema 容错、`connect-agent.mjs` 空 patch 文件处理、`.gitattributes` / `.dockerignore`）
+   之后又复跑了一次，同样 0 报错（见第四节）。
+7. 云端实际部署（Render / Zeabur / VPS）未实测，多用户隔离与远程 MCP 的生产环境行为待部署后验证。
+
+## 四、Lead 最终验收（收尾复跑，2026-11-23，可复现）
+
+> 以下数字是 lead 在**最终合并改动之后**重新执行的，不是并行任务中途的结果。
+
+| 项目 | 命令 / 方法 | 结果 |
+| --- | --- | --- |
+| 类型检查 | `npm run typecheck` | exit 0（shared + server + web 全部 `tsc --noEmit` 通过） |
+| 生产构建 | `npm run build` | exit 0（vite 44 模块，JS 208.98 KB / gzip 68.02 KB；server `tsc --noEmit`） |
+| 自动化测试 | `npm test` | 7 个文件 / **56 项全部通过**（含 STDIO 真实子进程、MCP HTTP、store、auth、sync） |
+| 真实进程 E2E（44 项断言全过） | 独立 Node 脚本拉起真实 `server/src/index.ts` 进程（PORT 3981/3982/3983 + 临时 `IELTS_COACH_DATA_DIR`），走真实 HTTP | `/health` 返回 `version 2.1.0`；`GET /` 返回构建后的网页；`POST /mcp` 真实 `initialize` + `tools/list` 返回 7 工具；`create_lesson` → `serverRunning=true`/`browserOpened=false`；浏览器式 `POST /api/lessons/:id/sync` 两次，`startedAt` 不被覆写、字幕落盘；`get_lesson_transcript` 读到 2 行；`save_turn_feedback`（含 LLM 多余字段）写回成功；`save_lesson_report` 置 `completed`；`upsert_memory` / `GET /api/memory` / `DELETE /api/memory/:id` 正常；`get_learner_context` 同时返回 completed 课程 + 记忆 + 本地服务状态 |
+| MCP Token 鉴权（真实套接字） | 启动 `MCP_TOKEN=smoke-token` 的进程 | 无 Token / 错 Token → `POST /mcp` 401；`Authorization: Bearer smoke-token` → initialize 成功；`?token=smoke-token` → initialize 成功；`/health` 含 `hasMcpToken` 但不泄露 token |
+| 多用户模式 | `MULTI_USER_MODE=true` 进程 | 本机回环仍可读写（设计如此）；非回环矩阵由 `server/tests/sync.test.ts` 3 项覆盖（公网列表/记忆 401，单节课 `?lesson=<id>` 能力链接放行） |
+| `ielts-mcp.bat` 真实 STDIO | 从 `C:\Windows` 用 `cmd /c` 拉起，喂 `initialize` / `tools/list` / `create_lesson` | stdout 3 行全部合法 JSON-RPC（无杂音）；7 工具；`create_lesson` 写入 `IELTS_COACH_DATA_DIR` 指定目录 |
+| `connect-agent.mjs` 假 home 实跑 | 预置 dsh（内容为 `[]`）/codex/claude/cursor 配置后实跑 + 二次运行 | dsh patch 正确 `- insert:` + `@deepseek-ai/dsh-mcp-client` + `cmd /c` 包装；codex 原 `model` 保留；claude 既有 server 保留；4 个 `.bak-YYYYMMDD-HHMMSS`；两次运行幂等；生成物用 PyYAML / `tomllib` / `JSON.parse` 重新解析通过；SKILL.md 复制到 `~/.dsh/skills` 与 `~/.agents/skills` |
+| 文本编码与换行 | 字节级检查 | 所有交付文本 UTF-8 无 BOM；`.bat` CRLF、`.sh` LF（新增 `.gitattributes` 固化，避免 Windows 检出后被改成 LF） |
+
+**本轮由 lead 直接补的收尾项**：`.gitattributes`（`.bat` 必须 CRLF，防止 cmd 解析中文报错）、
+`.dockerignore`（避免把宿主机 node_modules / .venv / 日志当作 Docker 构建上下文）、
+MCP 写回 schema 对 LLM 多余字段容错（拒绝整包写入会丢失用户精批）、
+`connect-agent.mjs` 处理 dsh patch 文件为 `[]` 或空文件的边界。
+
+**仍未验证**：真实厂商 Key / 真实语音通话、真实 AI 客户端 GUI 点击、真机 Safari/Android、
+`docker build` 与云平台部署、macOS/Linux 的 `ielts-mcp.sh` 实际执行（如上第三节）。
+

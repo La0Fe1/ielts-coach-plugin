@@ -1,6 +1,17 @@
 import { useState } from 'react';
 import type { LessonRecord, MemoryNote } from '@ielts/shared';
 
+const STATUS_LABEL: Record<'planned' | 'live' | 'completed', string> = {
+  planned: '待上课',
+  live: '进行中',
+  completed: '已完成',
+};
+
+function lessonStatus(lesson: LessonRecord): 'planned' | 'live' | 'completed' {
+  if (lesson.status) return lesson.status;
+  return lesson.report ? 'completed' : 'live';
+}
+
 export function HistorySheet(props: {
   open: boolean;
   lessons: LessonRecord[];
@@ -8,13 +19,16 @@ export function HistorySheet(props: {
   onClose: () => void;
   onExport: () => void;
   onImport: (file: File) => void;
+  onDeleteMemory: (note: MemoryNote) => void;
 }) {
-  const { open, lessons, memory, onClose, onExport, onImport } = props;
+  const { open, lessons, memory, onClose, onExport, onImport, onDeleteMemory } = props;
   const [selected, setSelected] = useState<LessonRecord | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   if (!open) return null;
 
   const close = () => {
     setSelected(null);
+    setPendingDelete(null);
     onClose();
   };
 
@@ -26,7 +40,8 @@ export function HistorySheet(props: {
         {selected ? (
           <>
             <p className="hint">
-              {new Date(selected.startedAt).toLocaleString('zh-CN')} · {selected.partMode} · {selected.topic}
+              {new Date(selected.startedAt).toLocaleString('zh-CN')} · {selected.partMode} · {selected.topic || '未命名话题'}{' '}
+              · {STATUS_LABEL[lessonStatus(selected)]}
             </p>
             <div className="history-lines">
               {selected.lines.map((line) => (
@@ -62,25 +77,54 @@ export function HistorySheet(props: {
               <span>已存课程（{lessons.length}）</span>
               {lessons.length === 0 && <p className="hint">还没有历史课。上完一节会自动存在这台设备。</p>}
               <div className="history-list">
-                {lessons.slice(0, 20).map((lesson) => (
-                  <button key={lesson.id} className="history-item" onClick={() => setSelected(lesson)}>
-                    <strong>{new Date(lesson.startedAt).toLocaleDateString('zh-CN')} · {lesson.partMode}</strong>
-                    <span>{lesson.topic || '未命名话题'}</span>
-                    <em>
-                      {lesson.report ? 'Overall ' + lesson.report.bands.overall.toFixed(1) : '未评分'}
-                    </em>
-                  </button>
-                ))}
+                {lessons.slice(0, 20).map((lesson) => {
+                  const status = lessonStatus(lesson);
+                  return (
+                    <button key={lesson.id} className="history-item" onClick={() => setSelected(lesson)}>
+                      <strong>
+                        {new Date(lesson.startedAt).toLocaleDateString('zh-CN')} · {lesson.partMode}
+                      </strong>
+                      <span>{lesson.topic || '未命名话题'}</span>
+                      <em className={'history-status ' + status}>
+                        {STATUS_LABEL[status]}
+                        {lesson.report ? ' · Overall ' + lesson.report.bands.overall.toFixed(1) : ''}
+                      </em>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
             <div className="field">
-              <span>长期记忆（{memory.length}）</span>
+              <span>长期记忆（{memory.length}）· 点 × 可删除</span>
               {memory.length === 0 && <p className="hint">上完课会自动记下薄弱点，下次开课会带进考官提示里。</p>}
               <div className="memory-tags">
                 {memory.slice(0, 12).map((note) => (
-                  <span key={note.id} className="memory-tag" title={note.content}>
-                    {note.title}
+                  <span key={note.id} className={'memory-tag' + (pendingDelete === note.id ? ' confirming' : '')}>
+                    {pendingDelete === note.id ? (
+                      <>
+                        <span>删除「{note.title}」？</span>
+                        <button
+                          className="memory-yes"
+                          onClick={() => {
+                            setPendingDelete(null);
+                            onDeleteMemory(note);
+                          }}
+                        >
+                          确认
+                        </button>
+                        <button className="memory-no" onClick={() => setPendingDelete(null)}>
+                          取消
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span title={note.content}>{note.title}</span>
+                        <button className="memory-x" title="删除这条长期记忆" onClick={() => setPendingDelete(note.id)}>
+                          ×
+                        </button>
+                      </>
+                    )}
                   </span>
                 ))}
               </div>

@@ -59,6 +59,11 @@ export async function listMemory(): Promise<MemoryNote[]> {
   return all.sort((a, b) => b.createdAt - a.createdAt);
 }
 
+/** Remove one long-term memory note (the web UI's × button). */
+export async function deleteMemoryNote(id: string): Promise<void> {
+  await withStore(MEMORY, 'readwrite', (store) => store.delete(id));
+}
+
 export async function saveReport(lessonId: string, report: LessonReport): Promise<void> {
   const lessons = await listLessons();
   const lesson = lessons.find((item) => item.id === lessonId);

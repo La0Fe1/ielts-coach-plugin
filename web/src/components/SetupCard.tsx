@@ -13,6 +13,12 @@ const STYLES: Array<{ id: RealtimeSettings['style']; label: string }> = [
   { id: 'coach', label: '纠错私教' },
 ];
 
+export interface CoachBanner {
+  topic: string;
+  reviewFocus?: string;
+  targetBand?: number;
+}
+
 export function SetupCard(props: {
   settings: RealtimeSettings;
   onChange: (patch: Partial<RealtimeSettings>) => void;
@@ -23,23 +29,38 @@ export function SetupCard(props: {
   error: string | null;
   ready: boolean;
   historyCount: number;
+  /** Set when the page was opened with ?lesson=<id> and the AI client planned this lesson. */
+  coachBanner?: CoachBanner | null;
 }) {
-  const { settings, onChange, onStart, onOpenSettings, onOpenHistory, busy, error, ready, historyCount } = props;
+  const { settings, onChange, onStart, onOpenSettings, onOpenHistory, busy, error, ready, historyCount, coachBanner } =
+    props;
+  const lockedToCoachPlan = Boolean(coachBanner);
   return (
     <div className="setup-wrap">
       <div className="setup-card">
+        {coachBanner && (
+          <div className="coach-banner">
+            <strong>已载入 AI 定制课表：{coachBanner.topic || '未命名话题'}</strong>
+            {coachBanner.reviewFocus && <span>本次重点：{coachBanner.reviewFocus}</span>}
+            <span className="hint">
+              点「开始对话」会直接沿用这份课表和题目，不再随机抽题
+              {coachBanner.targetBand ? '（目标 ' + coachBanner.targetBand.toFixed(1) + '）' : ''}。
+            </span>
+          </div>
+        )}
         <p className="pill">实时语音模考</p>
         <h1>随时开口，练真雅思</h1>
         <p className="lead">真实考官对话节奏，实时双语字幕同步，说完即看高分润色。</p>
 
         <div className="field">
-          <span>练哪一部分</span>
+          <span>{lockedToCoachPlan ? '练哪一部分（AI 定制课表已固定）' : '练哪一部分'}</span>
           <div className="chips">
             {PARTS.map((part) => (
               <button
                 key={part.id}
                 className={'chip' + (settings.partMode === part.id ? ' selected' : '')}
                 onClick={() => onChange({ partMode: part.id })}
+                disabled={lockedToCoachPlan}
               >
                 {part.label}
               </button>
@@ -55,6 +76,7 @@ export function SetupCard(props: {
                 key={band}
                 className={'chip' + (settings.targetBand === band ? ' selected' : '')}
                 onClick={() => onChange({ targetBand: band })}
+                disabled={lockedToCoachPlan}
               >
                 {band.toFixed(1)}
               </button>

@@ -4,6 +4,8 @@ export type Provider = 'qwen' | 'gemini' | 'openai';
 export type PartMode = 'part1' | 'part2' | 'part3' | 'full_mock';
 export type TurnMode = 'auto' | 'manual';
 export type ExaminerStyle = 'friendly' | 'strict' | 'coach';
+/** Where per-turn grammar coaching comes from: the web app or an external AI client. */
+export type ReviewMode = 'auto' | 'external' | 'deepseek' | 'custom';
 
 export interface PlanQuestion {
   part: 'part1' | 'part2' | 'part3';
@@ -67,6 +69,12 @@ export interface LessonRecord {
   lines: TranscriptLine[];
   feedback: Record<string, TurnFeedback>;
   report: LessonReport | null;
+  /** planned = created by an MCP client, live = opened in the browser, completed = report saved. */
+  status?: 'planned' | 'live' | 'completed';
+  /** Custom plan handed over by the AI client (null = browser planned it). */
+  plan?: LessonPlan | null;
+  /** What the external coach wanted this lesson to focus on. */
+  reviewFocus?: string;
 }
 
 export interface BandScores {
@@ -102,6 +110,12 @@ export interface RealtimeSettings {
   coachApiKey?: string;
   coachBaseUrl?: string;
   coachModel?: string;
+  /**
+   * auto = web app reuses the current provider for review;
+   * deepseek = dedicated DeepSeek preset; custom = user-supplied OpenAI-compatible endpoint;
+   * external = no per-turn API calls; the transcript is reviewed in 豆包 / dsh / Codex.
+   */
+  reviewMode?: ReviewMode;
   partMode: PartMode;
   targetBand: number;
   style: ExaminerStyle;

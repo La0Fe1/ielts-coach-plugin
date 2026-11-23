@@ -10,6 +10,7 @@ import {
   isClientEvent,
   type ClientEvent,
   type Provider,
+  type ReviewMode,
   type ServerEvent,
 } from '@ielts/shared';
 import { GeminiAdapter } from './adapters/gemini';
@@ -24,10 +25,56 @@ import {
   serverProviders,
 } from './auth';
 import { analyzeTurn, generateReport, pingCoach } from './coach';
+import { allowMcpRequest, isLoopback, mcpToken } from './mcp-core';
+import { mountMcp } from './mcp-http';
+import {
+  deleteMemory,
+  getLesson,
+  listLessons,
+  listMemory,
+  syncLesson,
+  upsertLesson,
+  upsertMemory,
+} from './store';
 
+const APP_VERSION = '2.1.0';
 const PORT = Number(process.env.PORT || 3000);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webDist = path.resolve(here, '../../web/dist');
+
+/** Default deployment is single-user local; MULTI_USER_MODE=true exposes it publicly. */
+function isMultiUserMode(): boolean {
+  return (process.env.MULTI_USER_MODE || '').toLowerCase() === 'true';
+}
+
+/** `?token=` fallback for sync clients that cannot set an Authorization header. */
+function queryToken(req: express.Request): string | undefined {
+  const value = req.query.token;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
+  return undefined;
+}
+
+/** `/health` and `/api/status` are the create_lesson probe; they never require auth. */
+function serverStatus(): {
+  ok: boolean;
+  service: string;
+  version: string;
+  port: number;
+  uptime: number;
+  hasMcpToken: boolean;
+  multiUserMode: boolean;
+} {
+  return {
+    ok: true,
+    service: 'ielts-coach-v2',
+    version: APP_VERSION,
+    port: PORT,
+    uptime: process.uptime(),
+    hasMcpToken: Boolean(mcpToken()),
+    multiUserMode: isMultiUserMode(),
+  };
+}
 
 const ADAPTERS: Record<Provider, RealtimeAdapter> = {
   qwen: new QwenAdapter(),
@@ -39,7 +86,12 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'ielts-coach-v2', version: '2.0.1', uptime: process.uptime() });
+  res.json(serverStatus());
+});
+
+// Lightweight readiness/version probe used by the MCP create_lesson flow.
+app.get('/api/status', (_req, res) => {
+  res.json(serverStatus());
 });
 
 app.get('/api/config/public', (_req, res) => {
@@ -53,6 +105,7 @@ function coachInput(body: Record<string, unknown>): {
   coachModel?: string;
   apiKey?: string;
   accessCode?: string;
+  reviewMode?: ReviewMode;
 } {
   return {
     provider: (body.provider || 'qwen') as Provider,
@@ -61,6 +114,7 @@ function coachInput(body: Record<string, unknown>): {
     coachModel: body.coachModel ? String(body.coachModel) : undefined,
     apiKey: body.apiKey ? String(body.apiKey) : undefined,
     accessCode: body.accessCode ? String(body.accessCode) : undefined,
+    reviewMode: body.reviewMode ? (String(body.reviewMode) as ReviewMode) : undefined,
   };
 }
 
@@ -119,6 +173,109 @@ app.post('/api/coach/test', async (req, res) => {
     coachError(res, error);
   }
 });
+
+/**
+ * Store-sync privacy rules (v2.1.0). The JSON store is a single shared file, so
+ * when the gateway is exposed publicly (MULTI_USER_MODE=true) we must not leak
+ * one learner's data to another:
+ *
+ * - Local mode (MULTI_USER_MODE unset, the default): every sync route keeps
+ *   working exactly as before; the store belongs to this one machine/user.
+ * - Public mode: loopback clients and clients carrying a valid MCP_TOKEN /
+ *   ACCESS_CODE (`Authorization: Bearer <token>` or `?token=<token>`) may sync
+ *   everything.
+ * - Public mode without a token: generic listings are denied (401) because
+ *   GET /api/lessons and every /api/memory* endpoint expose other learners'
+ *   data. A single lesson may still be touched through its unguessable id —
+ *   the `/?lesson=<id>` deep link acts as a capability token: GET
+ *   /api/lessons/:id, POST /api/lessons/:id/sync, and POST /api/lessons when the
+ *   body carries that explicit id. No arbitrary listing or memory access.
+ * - /health and /api/status never require auth (create_lesson probes them).
+ */
+export type SyncScope = 'global' | 'lesson';
+
+export interface SyncRequestInfo {
+  remoteAddress?: string;
+  authorization?: string;
+  token?: string;
+}
+
+export function syncAccessAllowed(info: SyncRequestInfo, scope: SyncScope): boolean {
+  if (!isMultiUserMode()) return true;
+  if (isLoopback(info.remoteAddress)) return true;
+  if (allowMcpRequest(info.remoteAddress, info.authorization, info.token)) return true;
+  // Tokenless public visitor: may only address one specific unguessable lesson.
+  return scope === 'lesson';
+}
+
+function syncGuard(req: express.Request, res: express.Response, scope: SyncScope = 'global'): boolean {
+  const allowed = syncAccessAllowed(
+    {
+      remoteAddress: req.socket.remoteAddress,
+      authorization: req.headers.authorization,
+      token: queryToken(req),
+    },
+    scope,
+  );
+  if (allowed) return true;
+  res.status(401).json({
+    error: '多用户模式：课程列表与长期记忆需要 MCP Token / 访问口令；单节课程可凭 ?lesson=<id> 链接按 id 访问',
+  });
+  return false;
+}
+
+app.get('/api/lessons', (req, res) => {
+  if (!syncGuard(req, res)) return;
+  const limit = Number(req.query.limit || 20);
+  res.json({ lessons: listLessons(Number.isFinite(limit) ? limit : 20) });
+});
+
+app.get('/api/lessons/:id', (req, res) => {
+  if (!syncGuard(req, res, 'lesson')) return;
+  const lesson = getLesson(String(req.params.id));
+  if (!lesson) {
+    res.status(404).json({ error: '课程不存在' });
+    return;
+  }
+  res.json({ lesson });
+});
+
+app.post('/api/lessons', (req, res) => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  if (!body.id) {
+    res.status(400).json({ error: '缺少课程 id' });
+    return;
+  }
+  // The explicit body id is the capability: a tokenless public client may create
+  // or update only that one lesson, never list the store.
+  if (!syncGuard(req, res, 'lesson')) return;
+  res.json({ lesson: upsertLesson(body as never) });
+});
+
+app.post('/api/lessons/:id/sync', (req, res) => {
+  if (!syncGuard(req, res, 'lesson')) return;
+  const body = (req.body || {}) as Record<string, unknown>;
+  res.json({ lesson: syncLesson({ ...body, id: String(req.params.id) } as never) });
+});
+
+app.get('/api/memory', (req, res) => {
+  if (!syncGuard(req, res)) return;
+  res.json({ memory: listMemory() });
+});
+
+app.post('/api/memory', (req, res) => {
+  if (!syncGuard(req, res)) return;
+  const body = (req.body || {}) as { items?: unknown[]; memory?: unknown[] };
+  const items = Array.isArray(body.items) ? body.items : Array.isArray(body.memory) ? body.memory : [];
+  res.json({ memory: upsertMemory(items as never) });
+});
+
+app.delete('/api/memory/:id', (req, res) => {
+  if (!syncGuard(req, res)) return;
+  res.json({ removed: deleteMemory([String(req.params.id)]) });
+});
+
+mountMcp(app);
 
 app.use(express.static(webDist, { index: 'index.html' }));
 app.get('*', (_req, res) => {
@@ -188,58 +345,63 @@ wss.on('connection', (ws: WebSocket) => {
     if (event.type === 'start_session') {
       if (handle || starting) return;
       starting = true;
-      const provider = event.provider;
-      const adapter = ADAPTERS[provider];
-      if (!adapter) {
-        fail('不支持的实时语音服务商', false);
-        return;
-      }
-      let apiKey = '';
       try {
-        apiKey = resolveCredential({
-          provider,
-          apiKey: event.apiKey,
-          accessCode: event.accessCode,
-        }).apiKey;
-      } catch (error) {
-        const authError = error as AuthError;
-        sendJson(ws, {
-          type: 'error',
-          code: authError.code || 'auth_failed',
-          message: authError.message || '鉴权失败',
-          retryable: false,
-        });
-        return;
-      }
-      const settings: StartSettings = {
-        provider,
-        model: event.model,
-        voice: event.voice,
-        endpointUrl: event.endpointUrl,
-        workspaceId: event.workspaceId,
-        apiKey,
-        systemPrompt: event.systemPrompt,
-        turnMode: event.turnMode === 'manual' ? 'manual' : 'auto',
-      };
-      try {
-        handle = await adapter.start(settings, {
-          emit: (payload) => sendJson(ws, payload),
-          audio: (pcm, rate) => {
-            if (ws.readyState !== WebSocket.OPEN) return;
-            ws.send(pcm);
-            void rate;
-          },
-          failed: (message, retryable) => fail(message, retryable),
-        });
-        // Replay anything the browser sent during the handshake (usually the
-        // opening greeting, which used to be dropped on slow networks).
-        while (pendingControls.length > 0) {
-          const queued = pendingControls.shift();
-          if (queued) applyControl(queued);
+        const provider = event.provider;
+        const adapter = ADAPTERS[provider];
+        if (!adapter) {
+          fail('不支持的实时语音服务商', false);
+          return;
         }
-      } catch (error) {
-        fail('连接实时语音失败: ' + String((error as Error).message || error));
+        let apiKey = '';
+        try {
+          apiKey = resolveCredential({
+            provider,
+            apiKey: event.apiKey,
+            accessCode: event.accessCode,
+          }).apiKey;
+        } catch (error) {
+          const authError = error as AuthError;
+          sendJson(ws, {
+            type: 'error',
+            code: authError.code || 'auth_failed',
+            message: authError.message || '鉴权失败',
+            retryable: false,
+          });
+          return;
+        }
+        const settings: StartSettings = {
+          provider,
+          model: event.model,
+          voice: event.voice,
+          endpointUrl: event.endpointUrl,
+          workspaceId: event.workspaceId,
+          apiKey,
+          systemPrompt: event.systemPrompt,
+          turnMode: event.turnMode === 'manual' ? 'manual' : 'auto',
+        };
+        try {
+          handle = await adapter.start(settings, {
+            emit: (payload) => sendJson(ws, payload),
+            audio: (pcm, rate) => {
+              if (ws.readyState !== WebSocket.OPEN) return;
+              ws.send(pcm);
+              void rate;
+            },
+            failed: (message, retryable) => fail(message, retryable),
+          });
+          // Replay anything the browser sent during the handshake (usually the
+          // opening greeting, which used to be dropped on slow networks).
+          while (pendingControls.length > 0) {
+            const queued = pendingControls.shift();
+            if (queued) applyControl(queued);
+          }
+        } catch (error) {
+          fail('连接实时语音失败: ' + String((error as Error).message || error));
+        }
       } finally {
+        // Reset on every path (missing adapter, auth failure, upstream failure):
+        // a stuck `starting` flag would silently swallow all later start_session
+        // frames and leave the socket dead until reconnect.
         starting = false;
       }
       return;

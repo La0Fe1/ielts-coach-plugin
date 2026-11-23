@@ -11,16 +11,20 @@ const DIMENSIONS: Array<[keyof LessonReport['bands'], string]> = [
 export function ReportView(props: {
   report: LessonReport | null;
   loading: boolean;
+  /** Shown instead of the generic empty line, e.g. external-review mode. */
+  emptyHint?: string | null;
   onRestart: () => void;
   onDownload: () => void;
+  /** External review mode: reopen the copyable prompt card. */
+  onShowPrompt?: (() => void) | null;
 }) {
-  const { report, loading, onRestart, onDownload } = props;
+  const { report, loading, emptyHint, onRestart, onDownload, onShowPrompt } = props;
   return (
     <div className="report">
       <p className="pill neutral">LESSON REPORT</p>
       <h1>这节课，留下了什么</h1>
       {loading && <p className="hint">正在汇总本课录音与精批，生成四维报告…</p>}
-      {!loading && !report && <p className="hint">本课没有生成报告，可以再来一节。</p>}
+      {!loading && !report && <p className="hint">{emptyHint || '本课没有生成报告，可以再来一节。'}</p>}
       {report && (
         <>
           <div className="bands">
@@ -82,6 +86,11 @@ export function ReportView(props: {
         <button className="ghost" onClick={onDownload} disabled={!report}>
           下载 Markdown
         </button>
+        {!report && onShowPrompt && (
+          <button className="ghost" onClick={onShowPrompt}>
+            复制精批提示词
+          </button>
+        )}
       </div>
     </div>
   );

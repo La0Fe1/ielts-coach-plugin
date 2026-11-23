@@ -5,4 +5,19 @@ services:
       - "3000:3000"
     env_file:
       - .env
+    # 这些值可在 .env 里覆盖；不写时给容器一个可持久化的默认数据目录。
+    environment:
+      # MCP 与网页共享的课程存储（store.json）；挂到下面的命名卷后重启不丢课
+      IELTS_COACH_DATA_DIR: ${IELTS_COACH_DATA_DIR:-/data}
+      # 公网多用户隔离：朋友各自浏览器数据不互相污染；单机自用保持 false
+      MULTI_USER_MODE: ${MULTI_USER_MODE:-false}
+      # create_lesson 返回的网页地址前缀；部署后填 https://你的域名，留空则用容器内 127.0.0.1
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      # 保护 /mcp 与同步接口：在 .env 里设置 MCP_TOKEN=<足够长的随机串>
+      # MCP_TOKEN 由 env_file 直接注入，这里不重复声明。
+    volumes:
+      - ielts-data:/data
     restart: unless-stopped
+
+volumes:
+  ielts-data:

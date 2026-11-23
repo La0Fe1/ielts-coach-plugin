@@ -69,6 +69,14 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .setup-card h1 { margin: 0; font-size: 30px; letter-spacing: -0.02em; }
 .setup-card p.lead { margin: 0; color: var(--ink-soft); line-height: 1.6; }
+.coach-banner {
+  display: grid; gap: 4px;
+  background: var(--accent-soft); border: 1px solid #d5dcf0;
+  border-radius: 14px; padding: 12px 14px;
+}
+.coach-banner strong { color: var(--accent); font-size: 14.5px; }
+.coach-banner span { color: var(--ink-soft); font-size: 13px; line-height: 1.55; }
+.review-panel { display: grid; gap: 10px; background: var(--paper); border-radius: 14px; padding: 12px; }
 .field { display: grid; gap: 8px; }
 .field > span { font-size: 13px; color: var(--muted); }
 .row { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -194,6 +202,27 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .history-item span { color: var(--ink-soft); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-item em { color: var(--accent); font-style: normal; font-size: 12px; }
 .memory-tags { display: flex; flex-wrap: wrap; gap: 8px; }
-.memory-tag { font-size: 12px; padding: 5px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.memory-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; padding: 5px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+}
+.memory-tag.confirming { background: #fbeeea; color: var(--coral); }
+.memory-x, .memory-yes, .memory-no {
+  border: none; background: transparent; padding: 0 2px; line-height: 1;
+  font-size: 13px; color: var(--muted);
+}
+.memory-x { font-size: 15px; }
+.memory-yes { color: var(--coral); }
+.memory-no { color: var(--muted); }
+.memory-x:hover { color: var(--coral); }
+.history-status { font-style: normal; font-size: 12px; }
+.history-status.planned { color: var(--muted); }
+.history-status.live { color: var(--amber); }
+.history-status.completed { color: var(--jade); }
 .file-label { position: relative; overflow: hidden; display: inline-flex; align-items: center; }
 .file-label input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.prompt-box {
+  background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px; font: inherit; font-size: 13.5px; line-height: 1.65;
+  white-space: pre-wrap; word-break: break-word; max-height: 46dvh; overflow-y: auto;
+}

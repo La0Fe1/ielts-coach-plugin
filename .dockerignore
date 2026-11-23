@@ -1,0 +1,27 @@
+# Docker build context hygiene (v2.1.0). The image builds from source with
+# selective COPY in the Dockerfile; these entries keep the context small and
+# prevent host state (node_modules, credentials, logs, the v1 Python venv)
+# from ever reaching the daemon.
+node_modules
+**/node_modules
+.git
+.gitignore
+.gitattributes
+.venv
+venv
+__pycache__
+*.pyc
+*.log
+*.bak-*
+.env
+.env.local
+web/dist
+server/dist
+shared/dist
+models
+legacy-v1
+data
+coverage
+.vite
+.DS_Store
+docs/.vitepress

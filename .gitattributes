@@ -1,0 +1,6 @@
+# Keep Windows launchers CRLF and POSIX launchers LF: a .bat file checked out
+# with LF line endings makes cmd.exe mis-parse Chinese output and `if` blocks.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.sh    text eol=lf

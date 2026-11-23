@@ -35,6 +35,7 @@ export function LiveStage(props: {
   onSelectFeedback: (turnId: string) => void;
   mobileSide: boolean;
   onToggleMobileSide: () => void;
+  coachBanner?: string | null;
 }) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
@@ -75,6 +76,7 @@ export function LiveStage(props: {
         </div>
 
         <div className="pills">
+          {props.coachBanner && <span className="pill">{props.coachBanner}</span>}
           <span className="pill">{props.handsFree ? '自动接话' : '手动提交'}</span>
           <span className="pill neutral">{props.speakerMode ? '🔊 外放防回声' : '🎧 耳机模式'}</span>
           {props.muted && <span className="pill neutral">麦克风已静音</span>}

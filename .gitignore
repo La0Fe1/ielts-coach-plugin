@@ -13,3 +13,10 @@ models/
 legacy-v1/
 coverage/
 .vite/
+
+# v2.1.0: 一键接入脚本的备份文件（<file>.bak-YYYYMMDD-HHMMSS）
+*.bak-*
+
+# v2.1.0: MCP / 网页共享课程存储（默认在 ~/.ielts-coach，这里防误提交到仓库）
+store.json
+data/

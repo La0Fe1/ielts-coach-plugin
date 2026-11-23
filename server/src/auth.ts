@@ -1,6 +1,6 @@
 /** Credential resolution: BYOK first, then the host's own keys (never open by accident). */
 
-import type { Provider } from '@ielts/shared';
+import type { Provider, ReviewMode } from '@ielts/shared';
 
 export interface CredentialInput {
   provider: Provider;
@@ -17,6 +17,13 @@ export interface CoachCredentialInput {
   /** Main realtime key reused for text when no dedicated one is given. */
   apiKey?: string;
   accessCode?: string;
+  /**
+   * v2.1.0 review routing chosen in the web settings sheet.
+   * auto = reuse the current voice provider; deepseek = dedicated DeepSeek preset;
+   * custom = user-supplied OpenAI-compatible endpoint; external = caller never
+   * reaches this module (the web app skips per-turn API calls).
+   */
+  reviewMode?: ReviewMode;
 }
 
 export interface CoachConfig {
@@ -40,6 +47,10 @@ export class AuthError extends Error {
     this.status = status;
   }
 }
+
+/** DeepSeek is OpenAI-compatible; these are the only default values ever sent there. */
+export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
+export const DEEPSEEK_MODEL = 'deepseek-chat';
 
 const ENV_KEY: Record<Provider, string> = {
   qwen: 'DASHSCOPE_API_KEY',
@@ -125,35 +136,124 @@ function providerCoachDefault(provider: Provider): CoachConfig {
   };
 }
 
+function isDeepSeekBase(url: string): boolean {
+  const clean = (url || '').toLowerCase();
+  if (!clean) return false;
+  try {
+    return new URL(clean).hostname.includes('deepseek');
+  } catch {
+    return clean.includes('deepseek');
+  }
+}
+
+function looksDeepSeekModel(model: string): boolean {
+  return (model || '').trim().toLowerCase().startsWith('deepseek');
+}
+
 /**
- * Text-coach credentials, in priority order:
+ * Build the coach config for the "auto / external" modes.
+ *
+ * v2.0.1 bug fix: a dedicated coach key must never be sent to the wrong provider
+ * domain. When the learner gave no baseUrl but the model name is a DeepSeek one
+ * (`deepseek-*`), the DeepSeek endpoint is used; likewise a DeepSeek baseUrl with
+ * no model falls back to `deepseek-chat` instead of the voice provider's model.
+ */
+function autoCoachConfig(
+  provider: Provider,
+  coachBaseUrl: string | undefined,
+  coachModel: string | undefined,
+  apiKey: string,
+): CoachConfig {
+  const fallback = providerCoachDefault(provider);
+  const baseHint = (coachBaseUrl || '').trim();
+  const modelHint = (coachModel || '').trim();
+  const baseUrl = (
+    baseHint || (looksDeepSeekModel(modelHint) ? DEEPSEEK_BASE_URL : fallback.baseUrl)
+  ).replace(/\/$/, '');
+  const model = modelHint || (isDeepSeekBase(baseUrl) ? DEEPSEEK_MODEL : fallback.model);
+  return { baseUrl, model, apiKey };
+}
+
+function deepseekCoachConfig(input: CoachCredentialInput): CoachConfig {
+  const baseUrl = ((input.coachBaseUrl || '').trim() || DEEPSEEK_BASE_URL).replace(/\/$/, '');
+  const model = (input.coachModel || '').trim() || DEEPSEEK_MODEL;
+  const dedicated = (input.coachApiKey || '').trim();
+  if (dedicated) return { baseUrl, model, apiKey: dedicated };
+
+  const serverKey = (process.env.DEEPSEEK_API_KEY || '').trim();
+  if (!serverKey) {
+    throw new AuthError(
+      'no_credentials',
+      '独立 DeepSeek 精批需要 DeepSeek API Key：请在「精批方式」里选择「独立 DeepSeek」并填写自己的 Key（或让站长配置 DEEPSEEK_API_KEY + 访问口令）。',
+      401,
+    );
+  }
+  if (!hostKeyAllowed(input.accessCode)) {
+    if (!accessCodeRequired()) {
+      throw new AuthError(
+        'access_code_not_configured',
+        '站长还没有设置访问口令，服务端 DeepSeek Key 暂不对外开放。请在「精批方式」里填写自己的 DeepSeek API Key。',
+        401,
+      );
+    }
+    throw new AuthError(
+      'bad_access_code',
+      '访问口令不正确，无法使用服务端 DeepSeek Key。请填写自己的 DeepSeek API Key 或重试口令。',
+      401,
+    );
+  }
+  return { baseUrl, model, apiKey: serverKey };
+}
+
+function customCoachConfig(input: CoachCredentialInput): CoachConfig {
+  const apiKey = (input.coachApiKey || input.apiKey || '').trim();
+  if (!apiKey) {
+    throw new AuthError(
+      'no_credentials',
+      '自定义精批需要 API Key：请填写自定义模型的 Key，或把「精批方式」切回「网页自动 / 独立 DeepSeek」。',
+      401,
+    );
+  }
+  const baseUrl = (input.coachBaseUrl || '').trim();
+  const model = (input.coachModel || '').trim();
+  if (!baseUrl || !model) {
+    throw new AuthError(
+      'custom_endpoint_missing',
+      '自定义精批需要同时填写 Base URL 与模型名；如果用的是 DeepSeek，请把「精批方式」改为「独立 DeepSeek」让它自动带出地址。',
+      400,
+    );
+  }
+  return { baseUrl: baseUrl.replace(/\/$/, ''), model, apiKey };
+}
+
+/**
+ * Text-coach credentials, in priority order (auto mode):
  * dedicated coach key -> the learner's realtime key -> server DeepSeek -> host key
  * (only with a valid access code). No silent fallback: callers get an error.
+ *
+ * v2.1.0 modes:
+ * - `deepseek` always targets the DeepSeek OpenAI-compatible endpoint.
+ * - `custom` always targets the learner's own baseUrl/model (both required).
+ * - `auto` / `external` / unset keep the legacy fallback chain above; `external`
+ *   normally never reaches this function because the web app skips API calls.
  */
 export function resolveCoachConfig(input: CoachCredentialInput): CoachConfig {
+  if (input.reviewMode === 'deepseek') return deepseekCoachConfig(input);
+  if (input.reviewMode === 'custom') return customCoachConfig(input);
+
   const dedicated = (input.coachApiKey || '').trim();
   if (dedicated) {
-    const fallback = providerCoachDefault(input.provider);
-    return {
-      baseUrl: (input.coachBaseUrl || fallback.baseUrl).replace(/\/$/, ''),
-      model: (input.coachModel || fallback.model).trim(),
-      apiKey: dedicated,
-    };
+    return autoCoachConfig(input.provider, input.coachBaseUrl, input.coachModel, dedicated);
   }
 
   const realtimeKey = (input.apiKey || '').trim();
   if (realtimeKey) {
-    const fallback = providerCoachDefault(input.provider);
-    return {
-      baseUrl: (input.coachBaseUrl || fallback.baseUrl).replace(/\/$/, ''),
-      model: (input.coachModel || fallback.model).trim(),
-      apiKey: realtimeKey,
-    };
+    return autoCoachConfig(input.provider, input.coachBaseUrl, input.coachModel, realtimeKey);
   }
 
   const deepseek = (process.env.DEEPSEEK_API_KEY || '').trim();
   if (deepseek && hostKeyAllowed(input.accessCode)) {
-    return { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiKey: deepseek };
+    return { baseUrl: DEEPSEEK_BASE_URL, model: DEEPSEEK_MODEL, apiKey: deepseek };
   }
 
   const host = envKey(input.provider);
