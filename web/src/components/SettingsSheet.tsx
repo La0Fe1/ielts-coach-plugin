@@ -30,9 +30,9 @@ const VOICE_ACCENTS: Array<{ id: VoiceAccent; label: string }> = [
  * The default used to be too snappy and cut learners off mid-thought.
  */
 const PAUSE_TOLERANCES: Array<{ id: PauseTolerance; label: string }> = [
-  { id: 'fast', label: '快速（约 2 秒）' },
-  { id: 'standard', label: '标准（约 3 秒，推荐）' },
-  { id: 'patient', label: '耐心（约 4 秒）' },
+  { id: 'fast', label: '快速（最长约 3.5 秒）' },
+  { id: 'standard', label: '标准（最长约 5 秒，推荐）' },
+  { id: 'patient', label: '耐心（最长约 6.5 秒）' },
 ];
 
 /** Official "where do I get a key" links, shown in the collapsible guide card. */
@@ -263,8 +263,9 @@ export function SettingsSheet(props: {
                 ))}
               </div>
               <p className="hint">
-                提交前还有约 1 秒「继续说话」窗口：停顿期间你一开口，这一轮就不会被打断。
-                思考多就选「耐心」，想练抢答速度就选「快速」。
+                停下后会先判断整段回答的完成度：出现 well / and / because / 嗯 / 然后 这类没说完的
+                尾巴，或只有一句短句，会继续等你到上限（默认约 5 秒）；两句话以上且说完整，约 3.5–3.7 秒
+                就交给考官。等待期间你一开口就取消提交。思考多就选「耐心」。
               </p>
             </div>
           </div>

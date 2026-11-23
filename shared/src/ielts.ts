@@ -144,6 +144,109 @@ export function hintWordsFor(tags: string[] | undefined, limit = 6): string[] {
   return words;
 }
 
+/* ------------------------------------------------------------------ */
+/* Endpointing: "has the learner actually finished the answer?"        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Trailing words that mean the learner is still organising the answer
+ * ("well…", "and…", "because…", "嗯…", "然后…"). English is case-insensitive.
+ */
+const TRAILING_DISCOURSE_MARKERS = new Set([
+  'uh', 'uhm', 'um', 'umm', 'erm', 'er', 'ah', 'eh', 'hmm', 'mm', 'mmm',
+  'well', 'like', 'actually', 'basically', 'literally', 'honestly',
+  'anyway', 'anyhow', 'so', 'then', 'and', 'but', 'or', 'because', 'cause', 'coz',
+  'if', 'when', 'while', 'although', 'though', 'however', 'plus', 'also',
+  'just', 'really', 'very', 'maybe', 'perhaps', 'you', 'i', 'we', 'they',
+]);
+
+/** Multi-word tails that clearly signal an unfinished thought. */
+const TRAILING_DISCOURSE_PHRASES = [
+  'you know', 'i mean', 'kind of', 'sort of', 'you see', 'let me think', 'let me see',
+  'hold on', 'hang on', 'in other words', 'what else', 'how do you say', 'what do you call it',
+  'i guess', 'i think', 'i would say', 'to be honest', 'as i said', 'for example',
+  'for instance', 'on the other hand', 'but also', 'and also', 'well i',
+];
+
+/** Chinese tails: matched with String#endsWith (no word spaces in Chinese). */
+const TRAILING_CJK_MARKERS = [
+  '嗯', '呃', '那个', '这个', '然后', '所以', '但是', '因为', '就是', '其实',
+  '就是说', '也就是说', '我想想', '怎么说', '等一下', '那个啥', '之类的', '什么的',
+];
+
+/** Last words that cannot end a finished sentence (articles / prepositions / possessives). */
+const OPEN_ENDINGS = new Set([
+  'a', 'an', 'the', 'of', 'to', 'in', 'on', 'at', 'for', 'with', 'about', 'from', 'by', 'as',
+  'that', 'which', 'who', 'whom', 'whose', 'than', 'my', 'your', 'his', 'her', 'our', 'their',
+  'its', 'this', 'these', 'those', 'some', 'any', 'more', 'most', 'such', 'own', 'same',
+  'only', 'quite', 'rather', 'too', 'between', 'into', 'through', 'during', 'without', 'within',
+  'against', 'among', 'across', 'along', 'around', 'behind', 'below', 'beneath', 'beside',
+  'beyond', 'despite', 'except', 'inside', 'outside', 'toward', 'towards', 'upon', 'via',
+]);
+
+export interface UtteranceAssessment {
+  /** English words + CJK characters. */
+  words: number;
+  /** Number of sentence-ending punctuation marks (0 when the browser adds none). */
+  sentenceCount: number;
+  /** Ends with "well / and / because / 嗯 / 然后 …". */
+  endsWithDiscourseMarker: boolean;
+  /** Ends with an article / preposition / possessive that needs a follow-up. */
+  endsOpen: boolean;
+  /** Ends with a comma / ellipsis / dash: the thought is visibly unfinished. */
+  endsWithSeparator: boolean;
+  /**
+   * The whole utterance looks like a finished answer: at least two sentences of
+   * reasonable length, or one long (>=14 words) stretch. One short sentence is
+   * deliberately NOT enough — IELTS answers usually need a second clause.
+   */
+  likelyComplete: boolean;
+}
+
+/**
+ * Assess how finished a learner utterance looks. Pure and dependency-free so the
+ * browser controller and the server tests share one implementation.
+ *
+ * The controller uses this to decide between "submit after the short grace
+ * window" and "keep waiting until the hard silence cap" — a floating "well…"
+ * or "and…" tail means the learner is still thinking, so we wait.
+ */
+export function assessUtterance(text: string): UtteranceAssessment {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  const lower = raw.toLowerCase();
+
+  // Word count: Latin/digit word tokens + CJK characters (Chinese has no spaces).
+  const latinWords = (raw.match(/[A-Za-z][A-Za-z0-9'’-]*/g) || []).length;
+  const cjkChars = (raw.match(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g) || []).length;
+  const words = latinWords + cjkChars;
+
+  const sentenceCount = (raw.match(/[.!?。！？]+/g) || []).length;
+
+  // Trailing English token after stripping surrounding punctuation.
+  const tailMatch = lower.match(/[a-z][a-z'’-]*\s*$/);
+  const tailWord = tailMatch ? tailMatch[0].trim() : '';
+  const tailWindow = lower.replace(/[^a-z0-9'\u4e00-\u9fa5\s-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const tailWords = tailWindow ? tailWindow.split(' ').slice(-3) : [];
+  const tailPhrase = tailWords.join(' ');
+
+  const endsWithDiscourseMarker =
+    (tailWord !== '' && TRAILING_DISCOURSE_MARKERS.has(tailWord)) ||
+    TRAILING_DISCOURSE_PHRASES.some((phrase) => tailPhrase.endsWith(phrase)) ||
+    TRAILING_CJK_MARKERS.some((marker) => raw.endsWith(marker));
+
+  const endsOpen = tailWord !== '' && OPEN_ENDINGS.has(tailWord);
+  const endsWithSeparator = /[,，、;；:：]\s*$/.test(raw) || /(?:\.{3,}|…|-|—)\s*$/.test(raw);
+
+  const likelyComplete =
+    words >= 2 &&
+    !endsWithDiscourseMarker &&
+    !endsOpen &&
+    !endsWithSeparator &&
+    ((sentenceCount >= 2 && words >= 8) || words >= 14);
+
+  return { words, sentenceCount, endsWithDiscourseMarker, endsOpen, endsWithSeparator, likelyComplete };
+}
+
 const STYLE_RULES: Record<ExaminerStyle, string> = {
   friendly: 'Be warm and encouraging. Never sound like an examiner reading a script.',
   strict: 'Be professional and neutral. Do not over-praise; keep the pace like a real test.',

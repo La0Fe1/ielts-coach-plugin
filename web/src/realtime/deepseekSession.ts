@@ -17,6 +17,7 @@ import type {
   PauseTolerance,
   ServerEvent,
 } from '@ielts/shared';
+import { assessUtterance } from '@ielts/shared';
 
 /* ------------------------------------------------------------------ */
 /* lib.dom 里仍然没有 SpeechRecognition 类型：和 speechFallback.ts 一样 */
@@ -83,17 +84,28 @@ const RESUME_AFTER_SPEECH_MS = 220;
 const MAX_CONVERSATION_MESSAGES = 16;
 
 /**
- * Auto-mode endpointing (v2.2.1 fix for the "打断我思考" complaint).
+ * Auto-mode endpointing (v2.2.2).
  *
- * After this much silence we only *schedule* a commit; the learner still gets
- * `grace` more milliseconds to resume speaking (any new word cancels it). That
- * way a natural thinking pause never cuts the answer in half and never triggers
- * an examiner reply mid-thought.
+ * v2.2.1 only stretched the pause; a clean first sentence still looked
+ * "finished" after ~3.5 s. A real IELTS answer is often two clauses and the
+ * learner may still be phrasing the second one ("…well, and…", "…because…").
+ * So now every auto pause is assessed with `assessUtterance`:
+ *
+ * - soft silence (`silence`): assess the whole utterance. If it ends with a
+ *   hesitation/filler tail or an open-ended word, or it is just one short
+ *   sentence, keep waiting up to the hard cap.
+ * - clean, clearly finished answer: submit after the short `grace` window.
+ * - hard silence (`hard`): submit whatever we have — the learner is stuck.
+ *
+ * Any new word during either window cancels the pending submit.
  */
-const AUTO_COMMIT_PROFILES: Record<PauseTolerance, { silence: number; jitter: number; grace: number }> = {
-  fast: { silence: 1500, jitter: 250, grace: 700 },
-  standard: { silence: 2500, jitter: 400, grace: 950 },
-  patient: { silence: 3500, jitter: 500, grace: 1200 },
+const AUTO_COMMIT_PROFILES: Record<
+  PauseTolerance,
+  { silence: number; jitter: number; grace: number; hard: number }
+> = {
+  fast: { silence: 1900, jitter: 250, grace: 800, hard: 3500 },
+  standard: { silence: 2600, jitter: 400, grace: 1100, hard: 5000 },
+  patient: { silence: 3300, jitter: 450, grace: 1300, hard: 6500 },
 };
 
 const GREETING_INSTRUCTION =
@@ -193,11 +205,15 @@ export class DeepSeekVoiceSession {
   private silenceTimer: number | null = null;
   /** Auto-mode: silence detected, waiting out the "keep talking" grace window. */
   private pendingCommitTimer: number | null = null;
+  /** Auto-mode: hard silence cap — submit even if the answer looks unfinished. */
+  private hardCommitTimer: number | null = null;
+  /** Timestamp of the last recognised word (used to measure the hard cap). */
+  private lastVoiceAt = 0;
   private restartTimer: number | null = null;
   private resumeTimer: number | null = null;
   private errorBackoffUntil = 0;
   private readonly noticeAt = new Map<string, number>();
-  private readonly autoProfile: { silence: number; jitter: number; grace: number };
+  private readonly autoProfile: { silence: number; jitter: number; grace: number; hard: number };
 
   private conversation: Array<{ role: 'user' | 'assistant'; text: string }> = [];
   private examinerBusy = false;
@@ -297,6 +313,7 @@ export class DeepSeekVoiceSession {
     if (muted) {
       this.clearSilenceTimer();
       this.clearPendingCommit();
+      this.clearHardCommit();
       this.stopRecognition();
       this.resetSegment();
       return;
@@ -452,8 +469,11 @@ export class DeepSeekVoiceSession {
     }
     if (!changed) return;
 
-    // 任何新的词（interim 或 final）都算"用户还在说"：取消待提交，避免思考停顿被截断。
+    // 任何新的词（interim 或 final）都算"用户还在说"：取消两种待提交，
+    // 并把硬上限的计时起点刷新为这一秒。
+    this.lastVoiceAt = Date.now();
     this.clearPendingCommit();
+    this.clearHardCommit();
     this.resetSilenceTimer();
     const text = this.currentText();
     if (!text) return;
@@ -516,25 +536,47 @@ export class DeepSeekVoiceSession {
     }
   }
 
-  /**
-   * 停顿达到阈值后不立刻提交，而是进入 grace 窗口；用户在这段时间内再开口，
-   * `handleRecognitionResult` 会调用 clearPendingCommit() 把这次停顿当作换气。
-   */
-  private schedulePendingCommit(): void {
+  /** Clean answer: submit after a short "keep talking" grace window. */
+  private scheduleGraceCommit(): void {
     this.clearPendingCommit();
     this.pendingCommitTimer = window.setTimeout(() => {
       this.pendingCommitTimer = null;
-      if (this.closed || this.muted || this.recognitionPaused) return;
-      if (this.turnMode !== 'auto' || this.examinerBusy) return;
-      const text = this.currentText();
-      if (text) this.commitText(text);
+      this.maybeCommit('grace');
     }, this.autoProfile.grace);
+  }
+
+  /**
+   * Unfinished-looking answer (filler/connector tail, single short sentence…):
+   * keep listening until the hard silence cap, then submit what we have.
+   */
+  private scheduleHardCommit(): void {
+    this.clearHardCommit();
+    const elapsed = Date.now() - this.lastVoiceAt;
+    const delay = Math.max(400, this.autoProfile.hard - elapsed);
+    this.hardCommitTimer = window.setTimeout(() => {
+      this.hardCommitTimer = null;
+      this.maybeCommit('hard');
+    }, delay);
+  }
+
+  private maybeCommit(_reason: 'grace' | 'hard'): void {
+    if (this.closed || this.muted || this.recognitionPaused) return;
+    if (this.turnMode !== 'auto' || this.examinerBusy) return;
+    const text = this.currentText();
+    if (text) this.commitText(text);
   }
 
   private clearPendingCommit(): void {
     if (this.pendingCommitTimer !== null) {
       window.clearTimeout(this.pendingCommitTimer);
       this.pendingCommitTimer = null;
+    }
+  }
+
+  private clearHardCommit(): void {
+    if (this.hardCommitTimer !== null) {
+      window.clearTimeout(this.hardCommitTimer);
+      this.hardCommitTimer = null;
     }
   }
 
@@ -548,12 +590,21 @@ export class DeepSeekVoiceSession {
     // manual / Part 2：绝不因为思考停顿而提前提交，等用户点「我说完了 / 我讲完了」。
     if (this.turnMode !== 'auto' || this.examinerBusy) return;
     const text = this.currentText();
-    // auto：先给 grace 窗口（默认约 0.95s）再提交；期间一开口就取消。
-    if (text) this.schedulePendingCommit();
+    if (!text) return;
+
+    // 整体性判断：两句话以上或足够长才算"像说完了"；带填充词 / 连接词尾巴、
+    // 或只有一句短句，都说明还在组织语言 → 等到硬上限（默认 5 秒）再提交。
+    const assessment = assessUtterance(text);
+    if (assessment.likelyComplete) {
+      this.scheduleGraceCommit();
+      return;
+    }
+    this.scheduleHardCommit();
   }
 
   private commitAccumulated(): void {
     this.clearPendingCommit();
+    this.clearHardCommit();
     const text = this.currentText();
     if (text) this.commitText(text);
   }
@@ -563,6 +614,7 @@ export class DeepSeekVoiceSession {
     if (!clean || this.closed) return;
     this.clearSilenceTimer();
     this.clearPendingCommit();
+    this.clearHardCommit();
     this.speechActive = false;
     const itemId = this.ensureItemId();
     this.emit({ type: 'user_transcript_final', itemId, text: clean });
@@ -606,6 +658,7 @@ export class DeepSeekVoiceSession {
     this.speechActive = false;
     this.clearSilenceTimer();
     this.clearPendingCommit();
+    this.clearHardCommit();
   }
 
   private ensureItemId(): string {
@@ -623,6 +676,7 @@ export class DeepSeekVoiceSession {
     this.recognitionPaused = true;
     this.clearSilenceTimer();
     this.clearPendingCommit();
+    this.clearHardCommit();
     this.stopRecognition();
     this.resetSegment();
     this.speechActive = false;
@@ -777,6 +831,7 @@ export class DeepSeekVoiceSession {
     this.turnSeq += 1;
     this.clearSilenceTimer();
     this.clearPendingCommit();
+    this.clearHardCommit();
     const controller = this.abortController;
     this.abortController = null;
     try {
@@ -1051,6 +1106,7 @@ export class DeepSeekVoiceSession {
   private clearTimers(): void {
     this.clearSilenceTimer();
     this.clearPendingCommit();
+    this.clearHardCommit();
     if (this.restartTimer !== null) {
       window.clearTimeout(this.restartTimer);
       this.restartTimer = null;
