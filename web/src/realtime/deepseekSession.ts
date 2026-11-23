@@ -77,7 +77,9 @@ export const SPEECH_NO_MIC_NOTICE =
 const DEFAULT_MODEL = 'deepseek-chat';
 const OUTPUT_SAMPLE_RATE = 24000;
 const MAX_SENTENCE_CHARS = 180;
-const TTS_PREFETCH = 2;
+const TTS_PREFETCH = 1;
+/** v2.2.3: one Edge-TTS request covers up to this many chars (fewer requests = no 429). */
+const MAX_TTS_CHARS = 420;
 /** Manual-mode hint only: "你停下来了" pill; never auto-submits in manual mode. */
 const SILENCE_NOTICE_MS = 1600;
 const RESUME_AFTER_SPEECH_MS = 220;
@@ -161,6 +163,27 @@ function splitSentences(text: string): string[] {
   }
   if (current) sentences.push(current);
   return sentences;
+}
+
+/** Merge short sentences into <=420-char TTS chunks: fewer requests, fewer 429s. */
+function chunkForTts(text: string, max = MAX_TTS_CHARS): string[] {
+  const sentences = splitSentences(text);
+  const chunks: string[] = [];
+  let current = '';
+  for (const sentence of sentences) {
+    if (!current) {
+      current = sentence;
+      continue;
+    }
+    if ((current + ' ' + sentence).length <= max) {
+      current = current + ' ' + sentence;
+      continue;
+    }
+    chunks.push(current);
+    current = sentence;
+  }
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 function errorMessage(error: unknown): string {
@@ -261,6 +284,8 @@ export class DeepSeekVoiceSession {
       });
       return;
     }
+    // 在用户的点击手势里顺手解锁浏览器朗读，作为 Edge TTS 被限流时的兜底。
+    this.unlockBrowserSpeech();
     // 永远不要 throw：识别失败只是降级为打字，不能把整节课卡死。
     try {
       this.ensureRecognition();
@@ -955,30 +980,34 @@ export class DeepSeekVoiceSession {
   /* ----------------------------- 朗读 ----------------------------- */
 
   private async speak(text: string, seq: number): Promise<void> {
-    const sentences = splitSentences(text);
-    if (sentences.length === 0) {
+    const chunks = chunkForTts(text);
+    if (chunks.length === 0) {
       await this.delay(250);
       return;
     }
     try {
-      await this.speakWithEdgeTts(sentences, seq);
+      await this.speakWithEdgeTts(chunks, seq);
     } catch {
       if (seq !== this.turnSeq || this.closed) return;
+      // Edge 朗读被限流 / 不可用时，明确提示一次，再退回系统朗读，绝不让课堂静音。
+      this.emitNoticeOnce(
+        'speech_tts_fallback',
+        '微软朗读服务暂时被限流，已自动切换为浏览器朗读（音色会变），不影响继续练习。',
+      );
       await this.speakWithBrowser(text, seq);
     }
   }
 
-  private async speakWithEdgeTts(sentences: string[], seq: number): Promise<void> {
-    const slots: Array<Promise<TtsSlot> | undefined> = new Array(sentences.length);
+  private async speakWithEdgeTts(chunks: string[], seq: number): Promise<void> {
+    const slots: Array<Promise<TtsSlot> | undefined> = new Array(chunks.length);
     const startSlot = (index: number): void => {
-      if (index < 0 || index >= sentences.length || slots[index]) return;
-      const sentence = sentences[index];
-      slots[index] = this.fetchTts(sentence)
+      if (index < 0 || index >= chunks.length || slots[index]) return;
+      slots[index] = this.fetchTts(chunks[index])
         .then((buffer) => ({ buffer }))
         .catch((error: unknown) => ({ error }));
     };
-    for (let index = 0; index <= TTS_PREFETCH && index < sentences.length; index += 1) startSlot(index);
-    for (let index = 0; index < sentences.length; index += 1) {
+    for (let index = 0; index <= TTS_PREFETCH && index < chunks.length; index += 1) startSlot(index);
+    for (let index = 0; index < chunks.length; index += 1) {
       if (seq !== this.turnSeq || this.closed) return;
       startSlot(index + TTS_PREFETCH);
       const slot = await slots[index];
@@ -988,6 +1017,27 @@ export class DeepSeekVoiceSession {
         throw slot.error !== undefined ? slot.error : new Error('TTS unavailable');
       }
       await this.playBuffer(slot.buffer);
+    }
+  }
+
+  /**
+   * v2.2.3: Chrome blocks speechSynthesis until the page has a user gesture.
+   * App calls connect() from the click handler, so prime it with a silent
+   * utterance here; the fallback then really speaks when Edge TTS is throttled.
+   */
+  private unlockBrowserSpeech(): void {
+    try {
+      const synth = window.speechSynthesis;
+      const VoiceCtor = (window as unknown as { SpeechSynthesisUtterance?: typeof SpeechSynthesisUtterance })
+        .SpeechSynthesisUtterance;
+      if (!synth || typeof VoiceCtor !== 'function') return;
+      synth.resume?.();
+      const utterance = new VoiceCtor(' ');
+      utterance.volume = 0;
+      synth.speak(utterance);
+      synth.cancel();
+    } catch {
+      /* 浏览器朗读不可用时，Edge TTS 仍然是主路径 */
     }
   }
 
@@ -1036,6 +1086,13 @@ export class DeepSeekVoiceSession {
       return;
     }
     const lang = this.recognitionLanguage();
+    try {
+      // 清掉可能卡住的上一条朗读，并确保引擎没有处于暂停状态。
+      synth.cancel();
+      synth.resume?.();
+    } catch {
+      /* resume/cancel are best-effort */
+    }
     await new Promise<void>((resolve) => {
       let settled = false;
       const finish = (): void => {

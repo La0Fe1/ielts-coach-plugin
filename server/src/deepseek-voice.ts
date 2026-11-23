@@ -362,18 +362,50 @@ function loadEdgeTts(): Promise<EdgeTtsModule> {
 }
 
 /**
- * Render text to MP3 with Microsoft Edge Neural TTS.
+ * v2.2.3 resilience: Microsoft Edge throttles bursts of syntheses with HTTP 429
+ * ("Unexpected server response: 429") and the learner then heard nothing.
  *
- * A fresh `EdgeTTS` instance per call keeps concurrent sentence requests safe.
- * Throws on any failure so the route can answer 503 and the browser can fall
- * back to `window.speechSynthesis`.
+ * - A tiny LRU cache makes repeated examiner lines free.
+ * - All syntheses are serialized through one chain so the browser's sentence
+ *   pipeline can never fire a burst of parallel requests.
+ * - 429/rate-limit failures are retried with backoff before we give up and let
+ *   the route answer 503 (the browser then falls back to speechSynthesis).
  */
-export async function synthesizeSpeech(text: string, accent: 'uk' | 'us', voiceOverride?: string): Promise<Buffer> {
-  const cleaned = cleanTextForTts(text);
-  if (!cleaned) throw new Error('没有可朗读的文本');
-  const override = (voiceOverride || '').trim();
-  const voice = override || pickEdgeVoice(cleaned, accent);
+const TTS_CACHE_LIMIT = 128;
+const ttsCache = new Map<string, Buffer>();
+let ttsChain: Promise<unknown> = Promise.resolve();
 
+function cacheGet(key: string): Buffer | undefined {
+  return ttsCache.get(key);
+}
+
+function cachePut(key: string, audio: Buffer): void {
+  if (ttsCache.size >= TTS_CACHE_LIMIT) {
+    const oldest = ttsCache.keys().next().value;
+    if (oldest !== undefined) ttsCache.delete(oldest);
+  }
+  ttsCache.set(key, audio);
+}
+
+function enqueueTts<T>(job: () => Promise<T>): Promise<T> {
+  const run = ttsChain.then(job, job);
+  ttsChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+function isThrottled(error: unknown): boolean {
+  const message = String((error as Error)?.message || error || '');
+  return /429|too many|rate.?limit|forbidden|throttl/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function generateEdgeAudio(cleaned: string, voice: string): Promise<Buffer> {
   const { EdgeTTS, Constants } = await loadEdgeTts();
   const engine = new EdgeTTS({ timeout: TTS_TIMEOUT_MS });
   const result = await engine.generate(cleaned, voice, {
@@ -384,4 +416,40 @@ export async function synthesizeSpeech(text: string, accent: 'uk' | 'us', voiceO
   const audio = result.audio;
   if (!audio || audio.length === 0) throw new Error('Edge TTS 没有返回音频');
   return Buffer.isBuffer(audio) ? audio : Buffer.from(audio);
+}
+
+/**
+ * Render text to MP3 with Microsoft Edge Neural TTS.
+ *
+ * Serialized + cached + retried on throttling; throws only after the retries so
+ * the route can answer 503 and the browser can fall back to speechSynthesis.
+ */
+export async function synthesizeSpeech(text: string, accent: 'uk' | 'us', voiceOverride?: string): Promise<Buffer> {
+  const cleaned = cleanTextForTts(text);
+  if (!cleaned) throw new Error('没有可朗读的文本');
+  const override = (voiceOverride || '').trim();
+  const voice = override || pickEdgeVoice(cleaned, accent);
+  const cacheKey = voice + '|' + cleaned;
+
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+
+  const audio = await enqueueTts(async () => {
+    const again = cacheGet(cacheKey);
+    if (again) return again;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await generateEdgeAudio(cleaned, voice);
+      } catch (error) {
+        lastError = error;
+        if (!isThrottled(error) || attempt === 2) throw error;
+        await sleep(700 * (attempt + 1));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Edge TTS 失败'));
+  });
+
+  cachePut(cacheKey, audio);
+  return audio;
 }
