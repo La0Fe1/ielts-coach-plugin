@@ -16,8 +16,14 @@ import { GeminiAdapter } from './adapters/gemini';
 import { OpenAIAdapter } from './adapters/openai';
 import { QwenAdapter } from './adapters/qwen';
 import type { AdapterHandle, RealtimeAdapter, StartSettings } from './adapters/base';
-import { AuthError, accessCodeRequired, resolveCredential, serverProviders } from './auth';
-import { analyzeTurn, generateReport } from './coach';
+import {
+  AuthError,
+  accessCodeRequired,
+  resolveCoachConfig,
+  resolveCredential,
+  serverProviders,
+} from './auth';
+import { analyzeTurn, generateReport, pingCoach } from './coach';
 
 const PORT = Number(process.env.PORT || 3000);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -33,23 +39,48 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'ielts-coach-v2', version: '2.0.0', uptime: process.uptime() });
+  res.json({ ok: true, service: 'ielts-coach-v2', version: '2.0.1', uptime: process.uptime() });
 });
 
 app.get('/api/config/public', (_req, res) => {
   res.json({ hasAccessCode: accessCodeRequired(), serverProviders: serverProviders() });
 });
 
+function coachInput(body: Record<string, unknown>): {
+  provider: Provider;
+  coachApiKey?: string;
+  coachBaseUrl?: string;
+  coachModel?: string;
+  apiKey?: string;
+  accessCode?: string;
+} {
+  return {
+    provider: (body.provider || 'qwen') as Provider,
+    coachApiKey: body.coachApiKey ? String(body.coachApiKey) : undefined,
+    coachBaseUrl: body.coachBaseUrl ? String(body.coachBaseUrl) : undefined,
+    coachModel: body.coachModel ? String(body.coachModel) : undefined,
+    apiKey: body.apiKey ? String(body.apiKey) : undefined,
+    accessCode: body.accessCode ? String(body.accessCode) : undefined,
+  };
+}
+
+function coachError(res: express.Response, error: unknown): void {
+  if (error instanceof AuthError) {
+    res.status(error.status).json({ error: error.message, code: error.code });
+    return;
+  }
+  res.status(502).json({ error: String((error as Error).message || error) });
+}
+
 app.post('/api/coach/analyze-turn', async (req, res) => {
-  const body = req.body || {};
-  const provider = (body.provider || 'qwen') as Provider;
+  const body = (req.body || {}) as Record<string, unknown>;
   if (!body.learnerTranscript || String(body.learnerTranscript).trim().length < 3) {
     res.json({ feedback: null, skipped: 'too_short' });
     return;
   }
   try {
-    const feedback = await analyzeTurn({
-      provider,
+    const config = resolveCoachConfig(coachInput(body));
+    const feedback = await analyzeTurn(config, {
       part: String(body.part || 'part1'),
       examinerQuestion: String(body.examinerQuestion || ''),
       learnerTranscript: String(body.learnerTranscript),
@@ -58,16 +89,15 @@ app.post('/api/coach/analyze-turn', async (req, res) => {
     });
     res.json({ feedback });
   } catch (error) {
-    res.status(502).json({ error: String((error as Error).message || error) });
+    coachError(res, error);
   }
 });
 
 app.post('/api/coach/report', async (req, res) => {
-  const body = req.body || {};
-  const provider = (body.provider || 'qwen') as Provider;
+  const body = (req.body || {}) as Record<string, unknown>;
   try {
-    const report = await generateReport({
-      provider,
+    const config = resolveCoachConfig(coachInput(body));
+    const report = await generateReport(config, {
       partMode: String(body.partMode || 'part1'),
       targetBand: Number(body.targetBand || 7),
       turns: Array.isArray(body.turns) ? body.turns : [],
@@ -75,7 +105,18 @@ app.post('/api/coach/report', async (req, res) => {
     });
     res.json({ report });
   } catch (error) {
-    res.status(502).json({ error: String((error as Error).message || error) });
+    coachError(res, error);
+  }
+});
+
+app.post('/api/coach/test', async (req, res) => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  try {
+    const config = resolveCoachConfig(coachInput(body));
+    const result = await pingCoach(config);
+    res.status(result.ok ? 200 : 502).json({ ...result, model: config.model });
+  } catch (error) {
+    coachError(res, error);
   }
 });
 
@@ -86,10 +127,11 @@ app.get('*', (_req, res) => {
   });
 });
 
-const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+export function createGateway(): { app: express.Express; server: http.Server; wss: WebSocketServer } {
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ noServer: true });
 
-server.on('upgrade', (request, socket, head) => {
+  server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url || '/', 'http://localhost');
   if (url.pathname !== '/ws/realtime') {
     socket.destroy();
@@ -104,10 +146,24 @@ function sendJson(ws: WebSocket, event: ServerEvent): void {
 
 wss.on('connection', (ws: WebSocket) => {
   let handle: AdapterHandle | null = null;
-  let busy = false;
+  let starting = false;
+  // Control frames that arrived while the upstream handshake was still running.
+  const pendingControls: ClientEvent[] = [];
 
   const fail = (message: string, retryable = true): void => {
     sendJson(ws, { type: 'error', code: 'upstream', message, retryable });
+  };
+
+  const applyControl = (event: ClientEvent): void => {
+    if (!handle) return;
+    if (event.type === 'update_turn_mode') handle.setTurnMode(event.turnMode === 'manual' ? 'manual' : 'auto');
+    else if (event.type === 'commit_turn') handle.commit();
+    else if (event.type === 'interrupt') handle.interrupt();
+    else if (event.type === 'trigger_greeting') handle.greet(event.text);
+    else if (event.type === 'end_session') {
+      handle.close();
+      handle = null;
+    }
   };
 
   ws.on('message', async (raw, isBinary) => {
@@ -130,7 +186,8 @@ wss.on('connection', (ws: WebSocket) => {
     const event = parsed as ClientEvent;
 
     if (event.type === 'start_session') {
-      if (handle) return;
+      if (handle || starting) return;
+      starting = true;
       const provider = event.provider;
       const adapter = ADAPTERS[provider];
       if (!adapter) {
@@ -174,37 +231,29 @@ wss.on('connection', (ws: WebSocket) => {
           },
           failed: (message, retryable) => fail(message, retryable),
         });
+        // Replay anything the browser sent during the handshake (usually the
+        // opening greeting, which used to be dropped on slow networks).
+        while (pendingControls.length > 0) {
+          const queued = pendingControls.shift();
+          if (queued) applyControl(queued);
+        }
       } catch (error) {
         fail('连接实时语音失败: ' + String((error as Error).message || error));
+      } finally {
+        starting = false;
       }
       return;
     }
 
     if (!handle) {
+      if (starting) {
+        pendingControls.push(event);
+        return;
+      }
       fail('还没有建立实时会话', false);
       return;
     }
-    if (event.type === 'update_turn_mode') {
-      handle.setTurnMode(event.turnMode === 'manual' ? 'manual' : 'auto');
-      return;
-    }
-    if (event.type === 'commit_turn') {
-      handle.commit();
-      return;
-    }
-    if (event.type === 'interrupt') {
-      handle.interrupt();
-      return;
-    }
-    if (event.type === 'trigger_greeting') {
-      handle.greet(event.text);
-      return;
-    }
-    if (event.type === 'end_session') {
-      handle.close();
-      handle = null;
-      if (!busy) ws.close();
-    }
+    applyControl(event);
   });
 
   ws.on('close', () => {
@@ -215,15 +264,26 @@ wss.on('connection', (ws: WebSocket) => {
     handle?.close();
     handle = null;
   });
-});
+  });
 
-server.listen(PORT, () => {
-  const providers = serverProviders();
-  const enabled = Object.entries(providers)
-    .filter(([, on]) => on)
-    .map(([name]) => name)
-    .join(', ') || 'none (BYOK only)';
-  console.log('[ielts-v2] listening on http://localhost:' + PORT);
-  console.log('[ielts-v2] server-side keys: ' + enabled);
-  if (accessCodeRequired()) console.log('[ielts-v2] ACCESS_CODE 已启用');
-});
+  return { app, server, wss };
+}
+
+const isDirectRun = (() => {
+  const entry = process.argv[1] || '';
+  return entry.endsWith('index.ts') || entry.endsWith('index.js');
+})();
+
+if (isDirectRun) {
+  const { server } = createGateway();
+  server.listen(PORT, () => {
+    const providers = serverProviders();
+    const enabled = Object.entries(providers)
+      .filter(([, on]) => on)
+      .map(([name]) => name)
+      .join(', ') || 'none (BYOK only)';
+    console.log('[ielts-v2] listening on http://localhost:' + PORT);
+    console.log('[ielts-v2] server-side keys: ' + enabled);
+    if (accessCodeRequired()) console.log('[ielts-v2] ACCESS_CODE 已启用');
+  });
+}

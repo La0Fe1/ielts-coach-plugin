@@ -28,8 +28,18 @@ export class QwenAdapter implements RealtimeAdapter {
       headers: { Authorization: 'Bearer ' + settings.apiKey },
     });
 
+    let opened = false;
+    const pending: string[] = [];
     const send = (payload: Record<string, unknown>): void => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+      const message = JSON.stringify(payload);
+      if (opened && socket.readyState === WebSocket.OPEN) socket.send(message);
+      else if (!opened) pending.push(message);
+    };
+    const flush = (): void => {
+      while (pending.length > 0) {
+        const message = pending.shift();
+        if (message && socket.readyState === WebSocket.OPEN) socket.send(message);
+      }
     };
 
     const sessionUpdate = (turnMode: 'auto' | 'manual'): void => {
@@ -54,7 +64,9 @@ export class QwenAdapter implements RealtimeAdapter {
     let closed = false;
 
     socket.on('open', () => {
+      opened = true;
       sessionUpdate(mode);
+      flush();
       hooks.emit({
         type: 'session_ready',
         provider: 'qwen',
@@ -122,6 +134,20 @@ export class QwenAdapter implements RealtimeAdapter {
         const message = String(info?.message || event.message || 'Qwen realtime error');
         hooks.failed(message, true);
       }
+    });
+
+    // Do not hand back a handle before the upstream socket is really usable:
+    // otherwise the opening greeting is dropped on slow real networks.
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Qwen 握手超时')), 12000);
+      socket.once('open', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.once('error', (error) => {
+        clearTimeout(timer);
+        reject(new Error('Qwen 连接失败: ' + String((error as Error)?.message || error)));
+      });
     });
 
     socket.on('close', () => {

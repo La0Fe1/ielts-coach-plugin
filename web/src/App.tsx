@@ -3,7 +3,9 @@ import {
   buildExaminerSystemPrompt,
   planLesson,
   type LessonPlan,
+  type LessonRecord,
   type LessonReport,
+  type MemoryNote,
   type PublicConfig,
   type RealtimeSettings,
   type ServerEvent,
@@ -14,7 +16,8 @@ import { startCapture, type CaptureHandle } from './audio/capture';
 import { PcmPlayer } from './audio/player';
 import { RealtimeClient } from './realtime/client';
 import { DraftCaption } from './realtime/speechFallback';
-import { exportArchive, listLessons, saveLesson, saveMemory, saveReport } from './storage/db';
+import { exportArchive, importArchive, listLessons, listMemory, saveLesson, saveMemory, saveReport } from './storage/db';
+import { HistorySheet } from './components/HistorySheet';
 import { LiveStage, type CueState } from './components/LiveStage';
 import { ReportView } from './components/ReportView';
 import { SettingsSheet } from './components/SettingsSheet';
@@ -53,6 +56,9 @@ export default function App() {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [stage, setStage] = useState<'setup' | 'live' | 'report'>('setup');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<LessonRecord[]>([]);
+  const [memory, setMemory] = useState<MemoryNote[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lines, setLines] = useState<TranscriptLine[]>([]);
@@ -68,12 +74,12 @@ export default function App() {
   const [cue, setCue] = useState<CueState | null>(null);
   const [report, setReport] = useState<LessonReport | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
-  const [historyCount, setHistoryCount] = useState(0);
 
   const clientRef = useRef<RealtimeClient | null>(null);
   const captureRef = useRef<CaptureHandle | null>(null);
   const playerRef = useRef<PcmPlayer | null>(null);
   const draftCaptionRef = useRef<DraftCaption | null>(null);
+  const draftTimerRef = useRef<number | null>(null);
   const planRef = useRef<LessonPlan | null>(null);
   const lessonIdRef = useRef<string>('');
   const linesRef = useRef<TranscriptLine[]>([]);
@@ -82,21 +88,50 @@ export default function App() {
   const partRef = useRef<string>('part1');
   const analyzingRef = useRef<Set<string>>(new Set());
   const draftUserRef = useRef('');
+  const greetedRef = useRef(false);
+  const pendingUnmuteRef = useRef(false);
+
+  // Every callback below reads state through refs: React closures captured at
+  // connect time must never decide mute/echo/断线 behaviour later.
+  const settingsRef = useRef(settings);
+  const stageRef = useRef(stage);
+  const speakerModeRef = useRef(speakerMode);
+  const feedbackMapRef = useRef(feedbackMap);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+  useEffect(() => {
+    stageRef.current = stage;
+  }, [stage]);
+  useEffect(() => {
+    speakerModeRef.current = speakerMode;
+  }, [speakerMode]);
+  useEffect(() => {
+    feedbackMapRef.current = feedbackMap;
+  }, [feedbackMap]);
+
   const handsFree = settings.turnMode === 'auto';
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   }, [settings]);
 
+  const refreshLocal = useCallback(() => {
+    listLessons()
+      .then((items) => setHistory(items))
+      .catch(() => undefined);
+    listMemory()
+      .then((items) => setMemory(items))
+      .catch(() => undefined);
+  }, []);
+
   useEffect(() => {
     fetch('/api/config/public')
       .then((response) => (response.ok ? response.json() : null))
       .then((data: PublicConfig | null) => setConfig(data))
       .catch(() => undefined);
-    listLessons()
-      .then((items) => setHistoryCount(items.length))
-      .catch(() => undefined);
-  }, []);
+    refreshLocal();
+  }, [refreshLocal]);
 
   const patchSettings = useCallback((patch: Partial<RealtimeSettings>) => {
     setSettings((current) => ({ ...current, ...patch }));
@@ -107,15 +142,20 @@ export default function App() {
     return protocol + '://' + location.host + '/ws/realtime';
   }, []);
 
-  const pushLine = useCallback((line: TranscriptLine) => {
-    linesRef.current = [...linesRef.current, line];
-    setLines(linesRef.current);
+  const coachPayload = useCallback(() => {
+    const current = settingsRef.current;
+    return {
+      provider: current.provider,
+      apiKey: current.apiKey,
+      accessCode: current.accessCode,
+      coachApiKey: current.coachApiKey,
+      coachBaseUrl: current.coachBaseUrl,
+      coachModel: current.coachModel,
+    };
   }, []);
 
-  const finalizeLine = useCallback((id: string, text: string) => {
-    linesRef.current = linesRef.current.map((line) =>
-      line.id === id ? { ...line, text: text || line.text, final: true } : line,
-    );
+  const pushLine = useCallback((line: TranscriptLine) => {
+    linesRef.current = [...linesRef.current, line];
     setLines(linesRef.current);
   }, []);
 
@@ -125,58 +165,131 @@ export default function App() {
       if (learnerText.trim().split(/\s+/).length < 3) return;
       if (/^[\u4e00-\u9fa5]+$/.test(learnerText.trim())) return;
       analyzingRef.current.add(turnId);
+      const current = settingsRef.current;
       try {
         const response = await fetch('/api/coach/analyze-turn', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            provider: settings.provider,
+            ...coachPayload(),
             part: partRef.current,
             examinerQuestion,
             learnerTranscript: learnerText,
-            targetBand: settings.targetBand,
-            recentHistory: linesRef.current
-              .slice(-6)
-              .map((line) => ({ role: line.role, text: line.text })),
+            targetBand: current.targetBand,
+            recentHistory: linesRef.current.slice(-6).map((line) => ({ role: line.role, text: line.text })),
           }),
         });
-        if (!response.ok) return;
+        if (!response.ok) {
+          analyzingRef.current.delete(turnId);
+          return;
+        }
         const data = (await response.json()) as { feedback: TurnFeedback | null };
         if (!data.feedback) return;
-        setFeedbackMap((current) => ({ ...current, [turnId]: data.feedback as TurnFeedback }));
+        const nextMap = { ...feedbackMapRef.current, [turnId]: data.feedback };
+        feedbackMapRef.current = nextMap;
+        setFeedbackMap(nextMap);
         setCurrentFeedbackId(turnId);
         if (lessonIdRef.current) {
-          const lesson = {
+          const plan = planRef.current;
+          void saveLesson({
             id: lessonIdRef.current,
             startedAt: Date.now(),
             endedAt: null,
-            partMode: settings.partMode,
-            topic: planRef.current?.topic || '',
-            provider: settings.provider,
+            partMode: current.partMode,
+            topic: plan?.topic || '',
+            provider: current.provider,
             lines: linesRef.current,
-            feedback: { ...feedbackMap, [turnId]: data.feedback as TurnFeedback },
+            feedback: nextMap,
             report: null,
-          };
-          void saveLesson(lesson);
+          });
         }
       } catch {
         /* the card is best-effort */
       }
     },
-    [feedbackMap, settings.partMode, settings.provider, settings.targetBand],
+    [coachPayload],
   );
+
+  const releaseMicAfterTail = useCallback(() => {
+    pendingUnmuteRef.current = true;
+    const player = playerRef.current;
+    if (!player) return;
+    player.onIdle = () => {
+      if (!pendingUnmuteRef.current) return;
+      pendingUnmuteRef.current = false;
+      captureRef.current?.setMuted(false);
+    };
+  }, []);
+
+  const beginCue = useCallback((text: string) => {
+    setCue({ text, stage: 'prep', remaining: 60 });
+    captureRef.current?.setMuted(true);
+    clientRef.current?.send({ type: 'update_turn_mode', turnMode: 'manual' });
+    if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
+    let remaining = 60;
+    cueTimerRef.current = window.setInterval(() => {
+      remaining -= 1;
+      setCue((current) => (current ? { ...current, remaining: Math.max(0, remaining) } : current));
+      if (remaining <= 0) {
+        if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
+        setCue((current) => (current ? { ...current, stage: 'speak', remaining: 120 } : current));
+        captureRef.current?.setMuted(false);
+      }
+    }, 1000);
+  }, []);
+
+  const startCueSpeaking = useCallback(() => {
+    if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
+    setCue((current) => (current ? { ...current, stage: 'speak', remaining: 120 } : current));
+    captureRef.current?.setMuted(false);
+    clientRef.current?.send({ type: 'update_turn_mode', turnMode: 'manual' });
+    let remaining = 120;
+    cueTimerRef.current = window.setInterval(() => {
+      remaining -= 1;
+      setCue((current) => (current ? { ...current, remaining: Math.max(0, remaining) } : current));
+      if (remaining <= 0 && cueTimerRef.current) window.clearInterval(cueTimerRef.current);
+    }, 1000);
+  }, []);
+
+  const finishCue = useCallback(() => {
+    if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
+    cueTimerRef.current = null;
+    clientRef.current?.send({ type: 'commit_turn' });
+    clientRef.current?.send({ type: 'update_turn_mode', turnMode: 'auto' });
+    captureRef.current?.setMuted(false);
+    setCue(null);
+  }, []);
 
   const handleServerEvent = useCallback(
     (event: ServerEvent) => {
-      const player = playerRef.current;
       if (event.type === 'session_ready') {
         setOrb('idle');
+        if (!greetedRef.current) {
+          greetedRef.current = true;
+          const first = planRef.current?.questions[0];
+          if (first?.kind === 'cue_card') {
+            beginCue(first.text);
+          } else {
+            clientRef.current?.send({
+              type: 'trigger_greeting',
+              text: 'Begin the lesson now: greet the learner in one short English sentence, then ask question 1 exactly as written.',
+            });
+          }
+        }
         return;
       }
       if (event.type === 'user_speech_started') {
-        player?.flush();
+        playerRef.current?.flush();
         setOrb('listening');
-        if (speakerMode) captureRef.current?.setMuted(false);
+        if (speakerModeRef.current) captureRef.current?.setMuted(false);
+        pendingUnmuteRef.current = false;
+        // Draft captions only if the server stays silent for 1.2 s.
+        if (draftCaptionRef.current && draftTimerRef.current === null) {
+          draftTimerRef.current = window.setTimeout(() => {
+            draftCaptionRef.current?.start();
+            draftTimerRef.current = null;
+          }, 1200);
+        }
         return;
       }
       if (event.type === 'user_speech_stopped') {
@@ -184,6 +297,11 @@ export default function App() {
         return;
       }
       if (event.type === 'user_transcript_delta') {
+        if (draftTimerRef.current !== null) {
+          window.clearTimeout(draftTimerRef.current);
+          draftTimerRef.current = null;
+        }
+        draftCaptionRef.current?.stop();
         const next = event.mode === 'append' ? draftUserRef.current + event.text : event.text;
         draftUserRef.current = next;
         setDraftUser(next);
@@ -193,21 +311,17 @@ export default function App() {
         const text = event.text.trim();
         draftUserRef.current = '';
         setDraftUser('');
+        draftCaptionRef.current?.stop();
         if (!text) return;
         const lastExaminer = [...linesRef.current].reverse().find((line) => line.role === 'examiner');
         pushLine({ id: event.itemId + '-' + String(Date.now()), role: 'user', text, final: true, at: Date.now() });
         userTurnsRef.current += 1;
-        advancePart();
-        void analyzeTurn(
-          linesRef.current[linesRef.current.length - 1].id,
-          text,
-          lastExaminer?.text || '',
-        );
+        void analyzeTurn(linesRef.current[linesRef.current.length - 1].id, text, lastExaminer?.text || '');
         return;
       }
       if (event.type === 'examiner_transcript_delta') {
         setOrb('speaking');
-        if (speakerMode) captureRef.current?.setMuted(true);
+        if (speakerModeRef.current) captureRef.current?.setMuted(true);
         setDraftExaminer((current) => current + event.delta);
         return;
       }
@@ -221,7 +335,8 @@ export default function App() {
       }
       if (event.type === 'examiner_turn_done') {
         setOrb('idle');
-        if (speakerMode) captureRef.current?.setMuted(false);
+        // Keep the mic muted until the audio tail really finished playing.
+        if (speakerModeRef.current) releaseMicAfterTail();
         return;
       }
       if (event.type === 'error') {
@@ -230,52 +345,16 @@ export default function App() {
         setOrb('idle');
       }
     },
-    [analyzeTurn, pushLine, speakerMode],
+    [analyzeTurn, beginCue, pushLine, releaseMicAfterTail],
   );
 
-  const advancePart = useCallback(() => {
-    const plan = planRef.current;
-    if (!plan) return;
-    const index = userTurnsRef.current;
-    const question = plan.questions[index];
-    if (!question) return;
-    partRef.current = question.part;
-    if (question.kind === 'cue_card') {
-      setCue({ text: question.text, stage: 'prep', remaining: 60 });
-      clientRef.current?.send({ type: 'update_turn_mode', turnMode: 'manual' });
-      startCueTimer('prep', 60);
-    }
-  }, []);
-
-  const startCueTimer = useCallback((mode: 'prep' | 'speak', seconds: number) => {
-    if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
-    let remaining = seconds;
-    setCue((current) => (current ? { ...current, stage: mode, remaining } : current));
-    cueTimerRef.current = window.setInterval(() => {
-      remaining -= 1;
-      setCue((current) => (current ? { ...current, remaining: Math.max(0, remaining) } : current));
-      if (remaining <= 0) {
-        if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
-        if (mode === 'prep') startCueSpeaking();
-        else finishCue();
-      }
-    }, 1000);
-  }, []);
-
-  const startCueSpeaking = useCallback(() => {
-    setCue((current) => (current ? { ...current, stage: 'speak', remaining: 120 } : current));
-    clientRef.current?.send({ type: 'update_turn_mode', turnMode: 'manual' });
-    startCueTimer('speak', 120);
-  }, [startCueTimer]);
-
-  const finishCue = useCallback(() => {
-    if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
-    clientRef.current?.send({ type: 'commit_turn' });
-    clientRef.current?.send({ type: 'update_turn_mode', turnMode: 'auto' });
-    setCue(null);
-  }, []);
-
   const start = useCallback(async () => {
+    const current = settingsRef.current;
+    const hasCredentials = Boolean(current.apiKey || current.accessCode || config?.serverProviders[current.provider]);
+    if (!hasCredentials) {
+      setSettingsOpen(true);
+      return;
+    }
     setError(null);
     setBusy(true);
     setFeedbackMap({});
@@ -284,30 +363,34 @@ export default function App() {
     linesRef.current = [];
     userTurnsRef.current = 0;
     draftUserRef.current = '';
+    greetedRef.current = false;
     setDraftUser('');
     setDraftExaminer('');
     setCue(null);
     setReport(null);
 
-    const plan = planLesson(settings.partMode, settings.targetBand);
+    const recentMemory = memory.slice(0, 5).map((note) => note.title + ': ' + note.content);
+    const plan = planLesson(current.partMode, current.targetBand);
     planRef.current = plan;
     partRef.current = plan.questions[0]?.part || 'part1';
     lessonIdRef.current = 'l-' + String(Date.now());
-    saveLesson({
+    void saveLesson({
       id: lessonIdRef.current,
       startedAt: Date.now(),
       endedAt: null,
-      partMode: settings.partMode,
+      partMode: current.partMode,
       topic: plan.topic,
-      provider: settings.provider,
+      provider: current.provider,
       lines: [],
       feedback: {},
       report: null,
-    }).catch(() => undefined);
+    });
 
     try {
       // AudioContext must be created and resumed inside the click handler.
-      const Context = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const Context =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const context = new Context();
       await context.resume();
       const player = new PcmPlayer(24000, context);
@@ -317,41 +400,32 @@ export default function App() {
         onPcm: (pcm) => clientRef.current?.sendAudio(pcm),
       });
       captureRef.current = capture;
+      if (current.partMode === 'part2' || plan.questions[0]?.kind === 'cue_card') capture.setMuted(true);
 
       const client = new RealtimeClient(wsUrl);
       clientRef.current = client;
-      client.onEvent = (event) => {
-        if (event.type === 'error') {
-          setError(event.message);
-          return;
-        }
-        handleServerEvent(event);
-      };
+      client.onEvent = handleServerEvent;
       client.onAudio = (pcm, rate) => player.enqueue(pcm, rate);
       client.onClose = (reason) => {
-        if (stage === 'live') setError('连接已断开：' + reason);
+        if (stageRef.current === 'live') setError('连接已断开：' + reason);
       };
+      draftCaptionRef.current = new DraftCaption((text) => setDraftUser(text));
       await client.connect();
       client.send({
         type: 'start_session',
-        provider: settings.provider,
-        model: settings.model,
-        voice: settings.voice,
-        endpointUrl: settings.endpointUrl,
-        workspaceId: settings.workspaceId,
-        apiKey: settings.apiKey,
-        accessCode: settings.accessCode,
-        systemPrompt: buildExaminerSystemPrompt({ plan, style: settings.style }),
-        turnMode: settings.turnMode,
+        provider: current.provider,
+        model: current.model,
+        voice: current.voice,
+        endpointUrl: current.endpointUrl,
+        workspaceId: current.workspaceId,
+        apiKey: current.apiKey,
+        accessCode: current.accessCode,
+        systemPrompt: buildExaminerSystemPrompt({ plan, style: current.style, memory: recentMemory }),
+        turnMode: current.turnMode,
         inputSampleRate: 16000,
-      });
-      client.send({
-        type: 'trigger_greeting',
-        text: 'Begin the lesson now: greet the learner in one short English sentence, then ask question 1 exactly as written.',
       });
       setStage('live');
       setOrb('idle');
-      draftCaptionRef.current?.stop();
       setBusy(false);
     } catch (startError) {
       setBusy(false);
@@ -361,7 +435,7 @@ export default function App() {
       clientRef.current?.close();
       clientRef.current = null;
     }
-  }, [handleServerEvent, settings, stage, wsUrl]);
+  }, [config, handleServerEvent, memory, wsUrl]);
 
   const stopAll = useCallback(() => {
     if (cueTimerRef.current) window.clearInterval(cueTimerRef.current);
@@ -381,7 +455,6 @@ export default function App() {
   }, []);
 
   const endLesson = useCallback(async () => {
-    const plan = planRef.current;
     const localLines = linesRef.current;
     clientRef.current?.send({ type: 'end_session' });
     clientRef.current?.close();
@@ -392,6 +465,7 @@ export default function App() {
     setCue(null);
     setStage('report');
     setReportLoading(true);
+    setError(null);
     try {
       const turns: Array<{ examinerQuestion: string; learnerTranscript: string }> = [];
       let lastQuestion = '';
@@ -403,34 +477,45 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          provider: settings.provider,
-          partMode: settings.partMode,
-          targetBand: settings.targetBand,
+          ...coachPayload(),
+          partMode: settingsRef.current.partMode,
+          targetBand: settingsRef.current.targetBand,
           turns,
         }),
       });
-      const data = (await response.json()) as { report?: LessonReport };
-      if (data.report) {
-        setReport(data.report);
-        if (lessonIdRef.current) {
-          await saveReport(lessonIdRef.current, data.report);
-          await saveMemory(data.report.memory_updates);
-        }
+      const data = (await response.json()) as { report?: LessonReport; error?: string };
+      if (!response.ok || !data.report) {
+        setError(data.error || '报告生成失败，请检查精批模型设置后重试。');
+        return;
       }
-      if (plan) setHistoryCount((count) => count + 1);
+      setReport(data.report);
+      if (lessonIdRef.current) {
+        await saveReport(lessonIdRef.current, data.report);
+        await saveMemory(data.report.memory_updates);
+      }
+      refreshLocal();
     } catch (reportError) {
       setError('报告生成失败：' + String((reportError as Error).message || reportError));
     } finally {
       setReportLoading(false);
     }
-  }, [settings.partMode, settings.provider, settings.targetBand]);
+  }, [coachPayload, refreshLocal]);
 
   const downloadReport = useCallback(() => {
     if (!report) return;
     const text = [
       '# IELTS 口语课报告',
       '',
-      '总分 ' + report.bands.overall.toFixed(1) + ' · FC ' + report.bands.fc.toFixed(1) + ' · LR ' + report.bands.lr.toFixed(1) + ' · GRA ' + report.bands.gra.toFixed(1) + ' · PR ' + report.bands.pr.toFixed(1),
+      '总分 ' +
+        report.bands.overall.toFixed(1) +
+        ' · FC ' +
+        report.bands.fc.toFixed(1) +
+        ' · LR ' +
+        report.bands.lr.toFixed(1) +
+        ' · GRA ' +
+        report.bands.gra.toFixed(1) +
+        ' · PR ' +
+        report.bands.pr.toFixed(1),
       '',
       report.summary_zh,
       '',
@@ -462,13 +547,13 @@ export default function App() {
   }, []);
 
   const commitTurn = useCallback(() => {
-    if (handsFree) {
+    if (settingsRef.current.turnMode === 'auto') {
       clientRef.current?.send({ type: 'interrupt' });
       playerRef.current?.flush();
     } else {
       clientRef.current?.send({ type: 'commit_turn' });
     }
-  }, [handsFree]);
+  }, []);
 
   const feedbackIds = useMemo(() => {
     const map: Record<string, boolean> = {};
@@ -481,6 +566,26 @@ export default function App() {
   const currentFeedback = currentFeedbackId ? feedbackMap[currentFeedbackId] || null : null;
   const questionIndex = Math.min(userTurnsRef.current, (planRef.current?.questions.length || 1) - 1);
 
+  const exportData = useCallback(async () => {
+    const json = await exportArchive();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'ielts-archive.json';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const importData = useCallback(
+    async (file: File) => {
+      const text = await file.text();
+      await importArchive(text);
+      refreshLocal();
+    },
+    [refreshLocal],
+  );
+
   return (
     <div className="app">
       <header className="topbar">
@@ -489,14 +594,14 @@ export default function App() {
           IELTS 口语教练
         </div>
         <div className="top-actions">
+          <button className="ghost" onClick={() => setSettingsOpen(true)}>
+            {settings.apiKey || settings.accessCode ? '🟢 ' + (settings.apiKey ? providerName(settings.provider) : '口令已连') : '⚪ 配置连接'}
+          </button>
           {stage === 'live' && (
             <button className="ghost" onClick={stopAll}>
               挂断
             </button>
           )}
-          <button className="ghost" onClick={() => setSettingsOpen(true)}>
-            设置
-          </button>
         </div>
       </header>
 
@@ -506,11 +611,11 @@ export default function App() {
           onChange={patchSettings}
           onStart={() => void start()}
           onOpenSettings={() => setSettingsOpen(true)}
-          onOpenHistory={() => setSettingsOpen(true)}
+          onOpenHistory={() => setHistoryOpen(true)}
           busy={busy}
           error={error}
           ready={Boolean(settings.apiKey || settings.accessCode || config?.serverProviders[settings.provider])}
-          historyCount={historyCount}
+          historyCount={history.length}
         />
       )}
 
@@ -542,6 +647,10 @@ export default function App() {
           onEnd={() => void endLesson()}
           onStartCue={startCueSpeaking}
           onFinishCue={finishCue}
+          onSelectFeedback={(turnId) => {
+            setCurrentFeedbackId(turnId);
+            setMobileSide(true);
+          }}
           mobileSide={mobileSide}
           onToggleMobileSide={() => setMobileSide((current) => !current)}
         />
@@ -562,6 +671,15 @@ export default function App() {
         }}
       />
 
+      <HistorySheet
+        open={historyOpen}
+        lessons={history}
+        memory={memory}
+        onClose={() => setHistoryOpen(false)}
+        onExport={() => void exportData()}
+        onImport={(file) => void importData(file)}
+      />
+
       {error && stage !== 'setup' && (
         <div className="sheet-backdrop" onClick={() => setError(null)}>
           <div className="sheet" onClick={(event) => event.stopPropagation()} role="alertdialog">
@@ -580,4 +698,10 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function providerName(provider: RealtimeSettings['provider']): string {
+  if (provider === 'qwen') return '百炼通义';
+  if (provider === 'gemini') return 'Gemini';
+  return 'OpenAI';
 }

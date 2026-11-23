@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { TranscriptLine, TurnFeedback } from '@ielts/shared';
 import { FeedbackCard } from './FeedbackCard';
 
@@ -32,16 +32,26 @@ export function LiveStage(props: {
   onEnd: () => void;
   onStartCue: () => void;
   onFinishCue: () => void;
+  onSelectFeedback: (turnId: string) => void;
   mobileSide: boolean;
   onToggleMobileSide: () => void;
 }) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const [scratch, setScratch] = useState<string[]>(['', '', '', '']);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [props.lines.length, props.draftUser, props.draftExaminer]);
 
   const status =
-    props.orb === 'speaking' ? '考官正在说' : props.orb === 'listening' ? '在听你说' : props.orb === 'thinking' ? '正在整理' : '可以开口';
+    props.orb === 'speaking'
+      ? '考官正在说'
+      : props.orb === 'listening'
+        ? '在听你说'
+        : props.orb === 'thinking'
+          ? '正在整理'
+          : '可以开口';
 
   return (
     <div className={'stage' + (props.mobileSide ? ' mobile-side' : '')}>
@@ -65,10 +75,9 @@ export function LiveStage(props: {
         </div>
 
         <div className="pills">
-          <span className="pill">{props.handsFree ? '自由通话' : '手动控场'}</span>
-          <span className="pill neutral">{props.speakerMode ? '🔊 外放防回声' : '🎧 耳机全双工'}</span>
+          <span className="pill">{props.handsFree ? '自动接话' : '手动提交'}</span>
+          <span className="pill neutral">{props.speakerMode ? '🔊 外放防回声' : '🎧 耳机模式'}</span>
           {props.muted && <span className="pill neutral">麦克风已静音</span>}
-          {!props.handsFree && <span className="pill neutral">说完点「我说完了」</span>}
         </div>
 
         {props.cue && (
@@ -77,11 +86,27 @@ export function LiveStage(props: {
             <div className="cue-card">
               <pre>{props.cue.text}</pre>
             </div>
+            {props.cue.stage === 'prep' && (
+              <div className="scratch">
+                {scratch.map((value, index) => (
+                  <input
+                    key={String(index)}
+                    placeholder={'关键词 ' + String(index + 1)}
+                    value={value}
+                    onChange={(event) =>
+                      setScratch((current) => current.map((item, i) => (i === index ? event.target.value : item)))
+                    }
+                  />
+                ))}
+              </div>
+            )}
             <div className="row" style={{ marginTop: 10, alignItems: 'center' }}>
               <span className="cue-timer">
                 {Math.floor(props.cue.remaining / 60)}:{String(props.cue.remaining % 60).padStart(2, '0')}
               </span>
-              <span className="hint">{props.cue.stage === 'prep' ? '准备时间：可以写关键词，不会开麦' : '作答中：放心停顿，考官不会打断'}</span>
+              <span className="hint">
+                {props.cue.stage === 'prep' ? '准备时间：可以写关键词，不会开麦' : '作答中：放心停顿，考官不会打断'}
+              </span>
               {props.cue.stage === 'prep' ? (
                 <button className="primary" onClick={props.onStartCue}>
                   提前开讲
@@ -96,15 +121,37 @@ export function LiveStage(props: {
         )}
 
         <div className="subtitles">
-          {props.lines.map((line) => (
-            <div key={line.id} className={'line ' + line.role + (line.final ? '' : ' pending')}>
-              <span className="who">{line.role === 'user' ? '你' : '考官'}</span>
-              {props.captionsVisible || line.role === 'user' ? line.text : '（盲听模式，点这条可看文字）'}
-              {line.role === 'user' && props.feedbackIds[line.id] && (
-                <span className="badge-feedback">✨ 已生成精批</span>
-              )}
-            </div>
-          ))}
+          {props.lines.map((line) => {
+            const hidden =
+              line.role === 'examiner' && !props.captionsVisible && !revealed[line.id];
+            if (line.role === 'examiner') {
+              return (
+                <div
+                  key={line.id}
+                  className={'line examiner' + (line.final ? '' : ' pending')}
+                  onClick={() => {
+                    if (!props.captionsVisible) setRevealed((current) => ({ ...current, [line.id]: !current[line.id] }));
+                  }}
+                  style={{ cursor: props.captionsVisible ? 'default' : 'pointer' }}
+                >
+                  <span className="who">考官</span>
+                  {hidden ? '（盲听模式，点这条看文字）' : line.text}
+                </div>
+              );
+            }
+            return (
+              <div
+                key={line.id}
+                className={'line user' + (line.final ? '' : ' pending')}
+                onClick={() => props.onSelectFeedback(line.id)}
+                style={{ cursor: 'pointer' }}
+              >
+                <span className="who">你</span>
+                {line.text}
+                {props.feedbackIds[line.id] && <span className="badge-feedback">✨ 查看精批</span>}
+              </div>
+            );
+          })}
           {props.draftExaminer && (
             <div className="line examiner pending">
               <span className="who">考官</span>
@@ -141,12 +188,6 @@ export function LiveStage(props: {
 
       <aside className="stage-side">
         <FeedbackCard feedback={props.feedback} />
-        <div className="panel-card">
-          <h3>玩法</h3>
-          <p className="hint">
-            随时开口就能打断考官。外放模式下考官说话时会自动闭麦，点「打断」即可插话；Part 2 会自动收紧成手动模式，绝不打断你的独白。
-          </p>
-        </div>
       </aside>
     </div>
   );

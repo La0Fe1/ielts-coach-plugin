@@ -5,7 +5,7 @@ export function FeedbackCard({ feedback }: { feedback: TurnFeedback | null }) {
     return (
       <div className="panel-card">
         <h3>本轮精批</h3>
-        <p className="hint">说完一句后，这里会在后台生成语法修正和升级表达。</p>
+        <p className="hint">开口回答后，这里会整理本轮语法修改与高分升级表达。</p>
       </div>
     );
   }

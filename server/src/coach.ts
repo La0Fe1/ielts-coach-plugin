@@ -1,4 +1,4 @@
-/** Async side-track: correction card + end-of-lesson report (never blocks audio). */
+/** Async side-track: correction card + end-of-lesson report. No fake results. */
 
 import {
   buildAnalyzeTurnPrompt,
@@ -7,33 +7,25 @@ import {
   parseJsonLoose,
   type GrammarMistake,
   type LessonReport,
-  type Provider,
   type TurnFeedback,
 } from '@ielts/shared';
-import { coachConfig } from './auth';
-
-interface ChatMessage {
-  role: 'system' | 'user';
-  content: string;
-}
+import type { CoachConfig } from './auth';
 
 async function chatJson(
-  provider: Provider,
+  config: CoachConfig,
   system: string,
   user: string,
   timeoutMs = 40000,
-): Promise<Record<string, unknown> | null> {
-  const cfg = coachConfig(provider);
-  if (!cfg.apiKey) return null;
-  const response = await fetch(cfg.baseUrl.replace(/\/$/, '') + '/chat/completions', {
+): Promise<Record<string, unknown>> {
+  const response = await fetch(config.baseUrl.replace(/\/$/, '') + '/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.apiKey },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + config.apiKey },
     body: JSON.stringify({
-      model: cfg.model,
+      model: config.model,
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: user },
-      ] satisfies ChatMessage[],
+      ],
       temperature: 0.4,
       response_format: { type: 'json_object' },
     }),
@@ -41,42 +33,58 @@ async function chatJson(
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
-    throw new Error('coach 模型返回 ' + response.status + ': ' + detail.slice(0, 200));
+    throw new Error('精批模型返回 ' + response.status + ': ' + detail.slice(0, 200));
   }
   const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const text = data.choices?.[0]?.message?.content || '';
-  return parseJsonLoose(text);
+  const parsed = parseJsonLoose(text);
+  if (!parsed) throw new Error('精批模型没有返回 JSON');
+  return parsed;
 }
 
-export async function analyzeTurn(input: {
-  provider: Provider;
-  part: string;
-  examinerQuestion: string;
-  learnerTranscript: string;
-  targetBand: number;
-  recentHistory?: Array<{ role: 'user' | 'examiner'; text: string }>;
-}): Promise<TurnFeedback> {
+export async function analyzeTurn(
+  config: CoachConfig,
+  input: {
+    part: string;
+    examinerQuestion: string;
+    learnerTranscript: string;
+    targetBand: number;
+    recentHistory?: Array<{ role: 'user' | 'examiner'; text: string }>;
+  },
+): Promise<TurnFeedback> {
   const prompt = buildAnalyzeTurnPrompt(input);
-  const raw = await chatJson(input.provider, prompt.system, prompt.user);
+  const raw = await chatJson(config, prompt.system, prompt.user);
   return normalizeFeedback(raw);
 }
 
-function asNumber(value: unknown, fallback: number): number {
+function asBand(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(0, Math.min(9, Math.round(parsed * 2) / 2));
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 9) return null;
+  return Math.round(parsed * 2) / 2;
 }
 
-export async function generateReport(input: {
-  provider: Provider;
-  partMode: string;
-  targetBand: number;
-  turns: Array<{ examinerQuestion: string; learnerTranscript: string }>;
-  memory?: string[];
-}): Promise<LessonReport> {
+export async function generateReport(
+  config: CoachConfig,
+  input: {
+    partMode: string;
+    targetBand: number;
+    turns: Array<{ examinerQuestion: string; learnerTranscript: string }>;
+    memory?: string[];
+  },
+): Promise<LessonReport> {
   const prompt = buildReportPrompt(input);
-  const raw = (await chatJson(input.provider, prompt.system, prompt.user, 90000)) || {};
+  const raw = await chatJson(config, prompt.system, prompt.user, 90000);
   const bandsRaw = (raw.bands && typeof raw.bands === 'object' ? raw.bands : {}) as Record<string, unknown>;
+  const bands = {
+    overall: asBand(bandsRaw.overall),
+    fc: asBand(bandsRaw.fc),
+    lr: asBand(bandsRaw.lr),
+    gra: asBand(bandsRaw.gra),
+    pr: asBand(bandsRaw.pr),
+  };
+  if (Object.values(bands).some((value) => value === null)) {
+    throw new Error('报告缺少有效的四维分数，请重试一次');
+  }
   const mistakes: GrammarMistake[] = (Array.isArray(raw.top_mistakes) ? raw.top_mistakes : [])
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
     .slice(0, 3)
@@ -91,18 +99,18 @@ export async function generateReport(input: {
     .slice(0, 4)
     .map((item) => ({
       id: 'm-' + Math.random().toString(36).slice(2, 10),
-      kind: (String(item.kind || 'weakness') as 'weakness' | 'fact' | 'phrase'),
+      kind: String(item.kind || 'weakness') as 'weakness' | 'fact' | 'phrase',
       title: String(item.title || '课堂记忆'),
       content: String(item.content || ''),
       createdAt: Date.now(),
     }));
   return {
     bands: {
-      overall: asNumber(bandsRaw.overall, 6),
-      fc: asNumber(bandsRaw.fc, 6),
-      lr: asNumber(bandsRaw.lr, 6),
-      gra: asNumber(bandsRaw.gra, 6),
-      pr: asNumber(bandsRaw.pr, 6),
+      overall: bands.overall as number,
+      fc: bands.fc as number,
+      lr: bands.lr as number,
+      gra: bands.gra as number,
+      pr: bands.pr as number,
     },
     summary_zh: String(raw.summary_zh || ''),
     top_mistakes: mistakes,
@@ -112,4 +120,29 @@ export async function generateReport(input: {
       .slice(0, 3),
     memory_updates: updates,
   };
+}
+
+/** Cheapest possible round-trip to prove the text model works. */
+export async function pingCoach(config: CoachConfig): Promise<{ ok: boolean; latency_ms: number; message: string }> {
+  const started = Date.now();
+  const response = await fetch(config.baseUrl.replace(/\/$/, '') + '/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + config.apiKey },
+    body: JSON.stringify({
+      model: config.model,
+      messages: [
+        { role: 'system', content: 'Reply with the single word: ok' },
+        { role: 'user', content: 'ping' },
+      ],
+      max_tokens: 8,
+      temperature: 0,
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+  const latency = Date.now() - started;
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    return { ok: false, latency_ms: latency, message: '模型返回 ' + response.status + ': ' + detail.slice(0, 160) };
+  }
+  return { ok: true, latency_ms: latency, message: '连接正常' };
 }

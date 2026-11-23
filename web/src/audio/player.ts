@@ -5,6 +5,9 @@ export class PcmPlayer {
   private nextPlayTime = 0;
   private sources: AudioBufferSourceNode[] = [];
   private readonly sampleRate: number;
+  private idleTimer: number | null = null;
+  /** Fires ~220 ms after the last chunk finished: safe to unmute the mic. */
+  onIdle?: () => void;
 
   constructor(sampleRate = 24000, context?: AudioContext) {
     this.sampleRate = sampleRate;
@@ -31,8 +34,18 @@ export class PcmPlayer {
     source.start(startAt);
     this.nextPlayTime = startAt + buffer.duration;
     this.sources.push(source);
+    if (this.idleTimer !== null) {
+      window.clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
     source.onended = () => {
       this.sources = this.sources.filter((item) => item !== source);
+      if (this.sources.length > 0) return;
+      if (this.idleTimer !== null) window.clearTimeout(this.idleTimer);
+      this.idleTimer = window.setTimeout(() => {
+        this.idleTimer = null;
+        if (this.sources.length === 0) this.onIdle?.();
+      }, 220);
     };
   }
 
@@ -47,5 +60,9 @@ export class PcmPlayer {
     }
     this.sources = [];
     this.nextPlayTime = 0;
+    if (this.idleTimer !== null) {
+      window.clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
   }
 }

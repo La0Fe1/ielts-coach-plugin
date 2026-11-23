@@ -98,6 +98,10 @@ export interface RealtimeSettings {
   workspaceId?: string;
   apiKey?: string;
   accessCode?: string;
+  /** Optional dedicated text-coach credentials (cheaper than reusing the voice key). */
+  coachApiKey?: string;
+  coachBaseUrl?: string;
+  coachModel?: string;
   partMode: PartMode;
   targetBand: number;
   style: ExaminerStyle;

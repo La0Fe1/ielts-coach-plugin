@@ -29,8 +29,18 @@ export class OpenAIAdapter implements RealtimeAdapter {
     });
     let mode: 'auto' | 'manual' = settings.turnMode;
 
+    let opened = false;
+    const pending: string[] = [];
     const send = (payload: Record<string, unknown>): void => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+      const message = JSON.stringify(payload);
+      if (opened && socket.readyState === WebSocket.OPEN) socket.send(message);
+      else if (!opened) pending.push(message);
+    };
+    const flush = (): void => {
+      while (pending.length > 0) {
+        const message = pending.shift();
+        if (message && socket.readyState === WebSocket.OPEN) socket.send(message);
+      }
     };
 
     const sessionUpdate = (turnMode: 'auto' | 'manual'): void => {
@@ -52,7 +62,9 @@ export class OpenAIAdapter implements RealtimeAdapter {
     };
 
     socket.on('open', () => {
+      opened = true;
       sessionUpdate(mode);
+      flush();
       hooks.emit({
         type: 'session_ready',
         provider: 'openai',
@@ -121,6 +133,18 @@ export class OpenAIAdapter implements RealtimeAdapter {
         const info = event.error as { message?: string } | undefined;
         hooks.failed(String(info?.message || 'OpenAI realtime error'), true);
       }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('OpenAI 握手超时')), 12000);
+      socket.once('open', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.once('error', (error) => {
+        clearTimeout(timer);
+        reject(new Error('OpenAI 连接失败: ' + String((error as Error)?.message || error)));
+      });
     });
 
     socket.on('close', () => hooks.failed('OpenAI 连接已断开', true));

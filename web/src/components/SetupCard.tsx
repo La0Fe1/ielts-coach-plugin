@@ -1,10 +1,10 @@
 import type { PartMode, RealtimeSettings } from '@ielts/shared';
 
-const PARTS: Array<{ id: PartMode; label: string; hint: string }> = [
-  { id: 'part1', label: 'Part 1 日常问答', hint: '4 题热身' },
-  { id: 'part2', label: 'Part 2 题卡独白', hint: '1 分钟准备 + 2 分钟作答' },
-  { id: 'part3', label: 'Part 3 深度思辨', hint: '4 题追问' },
-  { id: 'full_mock', label: '全真模考', hint: 'Part 1 → 2 → 3' },
+const PARTS: Array<{ id: PartMode; label: string }> = [
+  { id: 'part1', label: 'Part 1 日常问答' },
+  { id: 'part2', label: 'Part 2 题卡独白' },
+  { id: 'part3', label: 'Part 3 深度思辨' },
+  { id: 'full_mock', label: '全真模考' },
 ];
 
 const STYLES: Array<{ id: RealtimeSettings['style']; label: string }> = [
@@ -28,11 +28,9 @@ export function SetupCard(props: {
   return (
     <div className="setup-wrap">
       <div className="setup-card">
-        <p className="pill">实时语音 · 2.0</p>
-        <h1>打开就能练的雅思口语外教</h1>
-        <p className="lead">
-          像打电话一样对话：考官会实时听、实时接话，你可以随时打断。语法和升级表达在后台安静生成，不打断开口。
-        </p>
+        <p className="pill">实时语音模考</p>
+        <h1>随时开口，练真雅思</h1>
+        <p className="lead">真实考官对话节奏，实时双语字幕同步，说完即看高分润色。</p>
 
         <div className="field">
           <span>练哪一部分</span>
@@ -42,7 +40,6 @@ export function SetupCard(props: {
                 key={part.id}
                 className={'chip' + (settings.partMode === part.id ? ' selected' : '')}
                 onClick={() => onChange({ partMode: part.id })}
-                title={part.hint}
               >
                 {part.label}
               </button>
@@ -80,26 +77,23 @@ export function SetupCard(props: {
           </div>
         </div>
 
-        <div className="hint">
-          当前服务商：{settings.provider} · {settings.model}
-          {settings.apiKey ? ' · 已用自带 Key' : settings.accessCode ? ' · 已用访问口令' : ' · 尚未配置'}
-          {historyCount > 0 ? ' · 本机已存 ' + String(historyCount) + ' 节课' : ''}
-        </div>
-
         {error && <p className="error">{error}</p>}
 
-        <button className="primary big-cta" onClick={onStart} disabled={busy || !ready}>
-          {busy ? '正在连接…' : '开始实时语音连麦'}
+        <button
+          className="primary big-cta"
+          onClick={() => (ready ? onStart() : onOpenSettings())}
+          disabled={busy}
+        >
+          {busy ? '正在连接…' : ready ? '开始对话' : '配置连接并开始'}
         </button>
         <div className="row">
           <button className="ghost" onClick={onOpenSettings}>
             连接设置
           </button>
-          <button className="ghost" onClick={onOpenHistory} disabled={historyCount === 0}>
-            历史课
+          <button className="ghost" onClick={onOpenHistory}>
+            历史课{historyCount > 0 ? '（' + String(historyCount) + '）' : ''}
           </button>
         </div>
-        <p className="hint">第一次点开始会请求麦克风权限；Key 只保存在你自己的浏览器里。</p>
       </div>
     </div>
   );
