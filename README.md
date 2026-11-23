@@ -1,4 +1,4 @@
-# IELTS 口语教练 · 实时语音 + 全生态 MCP（v2.2.3）
+# IELTS 口语教练 · 实时语音 + 全生态 MCP（v2.2.4）
 
 打开网页就能练雅思口语：**像打电话一样和考官对话**，实时听、实时接话，随时可以打断；
 语法纠错和升级表达在后台安静生成，不打断你开口。
@@ -42,7 +42,7 @@ npm run dev                      # 前端 5173 + 网关 3000
 通话中想用中文提问，点顶部 `🎤 识别：英文 / 中文` 切换；识别不可用（国内 Chrome 常见）就用底部
 自动展开的打字输入框继续，流程不会卡死。
 
-健康检查：`curl http://localhost:3000/health` 应返回 `version: "2.2.3"`。
+健康检查：`curl http://localhost:3000/health` 应返回 `version: "2.2.4"`。
 
 想用手机试：在电脑上执行 `npx cloudflared tunnel --url http://localhost:3000`，手机打开生成的
 https 链接即可（临时链接，关掉就失效；非 HTTPS 的局域网 IP 会被浏览器拒绝使用麦克风）。
@@ -369,6 +369,7 @@ DeepSeek 纯语音的边界（选之前先看清）：
 | DeepSeek 纯语音延迟 1.5–3 秒偏高 | 这是该模式的设计（识别停顿提交 + 文本往返 + 首句朗读）；要 < 1 秒请选百炼 / Gemini / OpenAI 端到端实时模式 |
 | 考官在我思考时插话 / 回答被截断 | v2.2.2 会按整段回答的完成度等待：一句短句或带 well / and / because / 嗯 / 然后 的尾巴会等到硬上限（默认约 5 秒）；仍觉得急就去设置把「接话速度」改成「耐心（最长约 6.5 秒）」，或切手动模式（点「我说完了」才提交） |
 | 有字幕但突然没声音 | v2.2.3 已修：微软 Edge 朗读被限流（429）时服务端会串行 + 重试 + 缓存，仍失败则自动切换浏览器朗读并在顶部提示；若还无声，检查系统音量 / 该标签页是否被静音，或换 Safari / Chrome |
+| 想确认日志朗读环境是否正常 | 打开 http://127.0.0.1:3000/sound-check.html 点「检查环境」→「播放测试音」，日志会直接告诉你问题在浏览器、服务端还是系统音量 |
 | 历史课看不到外部 AI 写回的精批 | v2.2.0 已补逐句精批与报告 `top_mistakes` / `upgraded_sentences` 渲染；升级后**硬刷新**浏览器 |
 | 端口被占用 | `.env` 里改 `PORT=3001`，网页与 MCP 会一起换端口 |
 | 豆包连接失败 / 401 | 确认地址是 `…/mcp` 且服务在运行；设了 `MCP_TOKEN` 就要在请求头填 `Authorization: Bearer <token>` |
@@ -402,7 +403,7 @@ node node_modules/tsx/dist/cli.mjs server/src/mcp-stdio.ts   # 手工跑 STDIO�
 ```
 
 交付与验证记录见 `docs/V2_DELIVERY.md`（含 v2.2.0 的本机实测证据与未实测清单），
-本版变更见 `docs/RELEASE_NOTES_v2.2.3.md`（v2.2.0 特性见 `docs/RELEASE_NOTES_v2.2.0.md`）。
+本版变更见 `docs/RELEASE_NOTES_v2.2.4.md`（v2.2.0 特性见 `docs/RELEASE_NOTES_v2.2.0.md`）。
 
 **依赖许可提示**：本项目自身为 MIT；DeepSeek 纯语音的朗读依赖
 [`@andresaya/edge-tts`](https://github.com/andresayac/edge-tts) 为 **GPL-3.0-only**

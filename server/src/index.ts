@@ -39,10 +39,26 @@ import {
   upsertMemory,
 } from './store';
 
-const APP_VERSION = '2.2.3';
+const APP_VERSION = '2.2.4';
 const PORT = Number(process.env.PORT || 3000);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webDist = path.resolve(here, '../../web/dist');
+
+/**
+ * v2.2.3 diagnostics: /api/status exposes these counters so a learner (or the
+ * /sound-check.html page) can prove whether the browser actually asked the
+ * server for speech, and whether Edge TTS answered.
+ */
+const ttsStats = {
+  requests: 0,
+  ok: 0,
+  failed: 0,
+  lastBytes: 0,
+  lastMs: 0,
+  lastTextChars: 0,
+  lastError: '',
+  lastAt: 0,
+};
 
 /** Default deployment is single-user local; MULTI_USER_MODE=true exposes it publicly. */
 function isMultiUserMode(): boolean {
@@ -66,6 +82,7 @@ function serverStatus(): {
   uptime: number;
   hasMcpToken: boolean;
   multiUserMode: boolean;
+  tts: typeof ttsStats;
 } {
   return {
     ok: true,
@@ -75,6 +92,7 @@ function serverStatus(): {
     uptime: process.uptime(),
     hasMcpToken: Boolean(mcpToken()),
     multiUserMode: isMultiUserMode(),
+    tts: { ...ttsStats },
   };
 }
 
@@ -359,14 +377,28 @@ app.post('/api/voice/tts', async (req, res) => {
   }
   const accent: 'uk' | 'us' = body.accent === 'us' ? 'us' : 'uk';
   const voice = typeof body.voice === 'string' ? body.voice.trim() : '';
+  const startedAt = Date.now();
+  ttsStats.requests += 1;
+  ttsStats.lastTextChars = text.length;
+  ttsStats.lastAt = startedAt;
   try {
     const audio = voice ? await synthesizeSpeech(text, accent, voice) : await synthesizeSpeech(text, accent);
+    ttsStats.ok += 1;
+    ttsStats.lastBytes = audio.length;
+    ttsStats.lastMs = Date.now() - startedAt;
+    ttsStats.lastError = '';
+    console.log(
+      '[tts] ok ' + String(audio.length) + 'B in ' + String(ttsStats.lastMs) + 'ms (' + String(text.length) + ' chars)',
+    );
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', String(audio.length));
     res.setHeader('Cache-Control', 'no-store');
     res.end(audio);
   } catch (error) {
-    console.error('[ielts-v2] Edge TTS 失败: ' + String((error as Error).message || error));
+    ttsStats.failed += 1;
+    ttsStats.lastMs = Date.now() - startedAt;
+    ttsStats.lastError = String((error as Error).message || error);
+    console.error('[ielts-v2] Edge TTS 失败: ' + ttsStats.lastError);
     if (res.headersSent) {
       res.end();
       return;

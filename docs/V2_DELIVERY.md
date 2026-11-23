@@ -388,3 +388,32 @@ v2.2.1 只是把停顿阈值放宽到约 3.5 秒；用户继续反馈：第一�
 
 **说明**：429 是外部服务的限流，本项目不能保证永远不触发；目标改为「触发时既不静音、也能继续上课」，
 排查入口在服务端 stderr 的 `[ielts-v2] Edge TTS 失败` 日志。
+---
+
+# v2.2.4 诊断增强记录（声音自检页 + TTS 计数器，2026-11-23）
+
+## 一、背景
+
+v2.2.3 修复了 Edge TTS 429 限流的根因后，用户仍反馈「还是没声音」。本机用无头 Edge（CDP）实测真实页面：
+`/api/voice/tts` 200、`decodeAudioData` 成功（3.5s / 48kHz / 单声道 / 峰值 0.41）、
+`AudioBufferSourceNode` 正常 ended、无 JS 报错 —— **浏览器端音频链路正常**，需要把排查前移到用户真实环境。
+
+## 二、新增诊断能力
+
+1. `web/public/sound-check.html`：声音自检页 `/sound-check.html`
+   - 环境检查（AudioContext / sampleRate / speechSynthesis / voices / bundle / 服务端版本与 TTS 计数）；
+   - 真实 Edge 朗读播放（HTTP 状态 / 字节数 / 解码时长 / 峰值 / 播放结果）；
+   - 浏览器朗读兜底通道测试；
+   - 页面顶部会显示服务端版本，用于确认是否加载到新版。
+2. 服务端 `/api/status` 增加 `tts` 计数器与 `[tts] ok ...` 日志，便于确认「浏览器有没有请求音频、成功没有」。
+3. 版本统一 `2.2.4`。
+
+## 三、验收（lead 复跑）
+
+| 项目 | 结果 |
+| --- | --- |
+| 类型检查 | `npm run typecheck` → exit 0 |
+| 自动化测试 | `npm test` → 9 个文件 / 93 项全绿 |
+| 生产构建 | `npm run build` → exit 0（`web/dist/sound-check.html` 已生成） |
+| 自检页 | 真实服务下 `GET /sound-check.html` 200；无头 Edge 实测真实页面音频链路全绿 |
+| 真实用户设备 | **待用户点自检页确认**（系统音量 / 输出设备 / 标签页静音无法从服务端判断） |

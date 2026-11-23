@@ -74,7 +74,7 @@ describe('gateway sync API over loopback', () => {
     expect(health.status).toBe(200);
     const healthData = (await health.json()) as Record<string, unknown>;
     expect(healthData.ok).toBe(true);
-    expect(healthData.version).toBe('2.2.3');
+    expect(healthData.version).toBe('2.2.4');
     expect(healthData.multiUserMode).toBe(true);
 
     const status = await fetch(gateway.httpUrl + '/api/status');

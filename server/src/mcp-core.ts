@@ -286,7 +286,7 @@ function mapCustomQuestions(custom: string[]): PlanQuestion[] {
 // ---------------------------------------------------------------------------
 
 export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer {
-  const server = new McpServer({ name: 'ielts-speaking-coach', version: '2.2.3' });
+  const server = new McpServer({ name: 'ielts-speaking-coach', version: '2.2.4' });
 
   server.tool(
     'get_learner_context',
