@@ -674,6 +674,7 @@ export default function App() {
           language: recognitionLanguage,
           systemPrompt: buildExaminerSystemPrompt({ plan, style: current.style, memory: recentMemory }),
           model: current.model || 'deepseek-chat',
+          pauseTolerance: current.pauseTolerance || 'standard',
           apiKey: current.apiKey,
           accessCode: current.accessCode,
           endpointUrl: current.endpointUrl,

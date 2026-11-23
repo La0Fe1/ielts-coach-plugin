@@ -252,7 +252,7 @@ describe('MCP over Streamable HTTP', () => {
     await response.body?.cancel().catch(() => undefined);
   });
 
-  it('keeps /health and /api/status public and reports v2.2.0', async () => {
+  it('keeps /health and /api/status public and reports v2.2.1', async () => {
     tempDataDir();
     const gateway = await startGateway();
     cleanups.push(gateway.close);
@@ -262,7 +262,7 @@ describe('MCP over Streamable HTTP', () => {
       expect(response.status).toBe(200);
       const data = (await response.json()) as Record<string, unknown>;
       expect(data.ok).toBe(true);
-      expect(data.version).toBe('2.2.0');
+      expect(data.version).toBe('2.2.1');
       expect(typeof data.hasMcpToken).toBe('boolean');
       expect(typeof data.port).toBe('number');
       expect(typeof data.uptime).toBe('number');

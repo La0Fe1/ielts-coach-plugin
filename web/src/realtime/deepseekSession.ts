@@ -10,7 +10,13 @@
  * 只要把 `onEvent` 接到同一个 `handleServerEvent` 即可。
  */
 
-import type { ClientEvent, DeepSeekTurnRequest, DeepSeekVoiceEvent, ServerEvent } from '@ielts/shared';
+import type {
+  ClientEvent,
+  DeepSeekTurnRequest,
+  DeepSeekVoiceEvent,
+  PauseTolerance,
+  ServerEvent,
+} from '@ielts/shared';
 
 /* ------------------------------------------------------------------ */
 /* lib.dom 里仍然没有 SpeechRecognition 类型：和 speechFallback.ts 一样 */
@@ -71,11 +77,24 @@ const DEFAULT_MODEL = 'deepseek-chat';
 const OUTPUT_SAMPLE_RATE = 24000;
 const MAX_SENTENCE_CHARS = 180;
 const TTS_PREFETCH = 2;
-const AUTO_COMMIT_MIN_MS = 1350;
-const AUTO_COMMIT_JITTER_MS = 400;
+/** Manual-mode hint only: "你停下来了" pill; never auto-submits in manual mode. */
 const SILENCE_NOTICE_MS = 1600;
 const RESUME_AFTER_SPEECH_MS = 220;
 const MAX_CONVERSATION_MESSAGES = 16;
+
+/**
+ * Auto-mode endpointing (v2.2.1 fix for the "打断我思考" complaint).
+ *
+ * After this much silence we only *schedule* a commit; the learner still gets
+ * `grace` more milliseconds to resume speaking (any new word cancels it). That
+ * way a natural thinking pause never cuts the answer in half and never triggers
+ * an examiner reply mid-thought.
+ */
+const AUTO_COMMIT_PROFILES: Record<PauseTolerance, { silence: number; jitter: number; grace: number }> = {
+  fast: { silence: 1500, jitter: 250, grace: 700 },
+  standard: { silence: 2500, jitter: 400, grace: 950 },
+  patient: { silence: 3500, jitter: 500, grace: 1200 },
+};
 
 const GREETING_INSTRUCTION =
   '(The lesson begins now. Greet me in one short English sentence, then ask question 1 exactly as written. Ask one question at a time and keep turns short.)';
@@ -90,6 +109,8 @@ export interface DeepSeekVoiceSessionOptions {
   apiKey?: string;
   accessCode?: string;
   endpointUrl?: string;
+  /** How patient the auto-submit endpointing is (default: standard). */
+  pauseTolerance?: PauseTolerance;
   /** 在 App 的点击事件里创建并 resume 过的 AudioContext（iOS 解锁要求）。 */
   audioContext: AudioContext;
 }
@@ -170,10 +191,13 @@ export class DeepSeekVoiceSession {
   private speechActive = false;
 
   private silenceTimer: number | null = null;
+  /** Auto-mode: silence detected, waiting out the "keep talking" grace window. */
+  private pendingCommitTimer: number | null = null;
   private restartTimer: number | null = null;
   private resumeTimer: number | null = null;
   private errorBackoffUntil = 0;
   private readonly noticeAt = new Map<string, number>();
+  private readonly autoProfile: { silence: number; jitter: number; grace: number };
 
   private conversation: Array<{ role: 'user' | 'assistant'; text: string }> = [];
   private examinerBusy = false;
@@ -200,6 +224,7 @@ export class DeepSeekVoiceSession {
     this.accent = options.accent === 'us' ? 'us' : 'uk';
     this.turnMode = options.turnMode === 'manual' ? 'manual' : 'auto';
     this.language = options.language === 'zh' ? 'zh' : 'en';
+    this.autoProfile = AUTO_COMMIT_PROFILES[options.pauseTolerance || 'standard'] || AUTO_COMMIT_PROFILES.standard;
   }
 
   /** 浏览器是否具备 SpeechRecognition（没有时由 App 显示打字备用提示）。 */
@@ -271,6 +296,7 @@ export class DeepSeekVoiceSession {
     this.muted = muted;
     if (muted) {
       this.clearSilenceTimer();
+      this.clearPendingCommit();
       this.stopRecognition();
       this.resetSegment();
       return;
@@ -426,6 +452,8 @@ export class DeepSeekVoiceSession {
     }
     if (!changed) return;
 
+    // 任何新的词（interim 或 final）都算"用户还在说"：取消待提交，避免思考停顿被截断。
+    this.clearPendingCommit();
     this.resetSilenceTimer();
     const text = this.currentText();
     if (!text) return;
@@ -473,7 +501,7 @@ export class DeepSeekVoiceSession {
     this.clearSilenceTimer();
     const delay =
       this.turnMode === 'auto'
-        ? AUTO_COMMIT_MIN_MS + Math.round(Math.random() * AUTO_COMMIT_JITTER_MS)
+        ? this.autoProfile.silence + Math.round(Math.random() * this.autoProfile.jitter)
         : SILENCE_NOTICE_MS;
     this.silenceTimer = window.setTimeout(() => {
       this.silenceTimer = null;
@@ -488,6 +516,28 @@ export class DeepSeekVoiceSession {
     }
   }
 
+  /**
+   * 停顿达到阈值后不立刻提交，而是进入 grace 窗口；用户在这段时间内再开口，
+   * `handleRecognitionResult` 会调用 clearPendingCommit() 把这次停顿当作换气。
+   */
+  private schedulePendingCommit(): void {
+    this.clearPendingCommit();
+    this.pendingCommitTimer = window.setTimeout(() => {
+      this.pendingCommitTimer = null;
+      if (this.closed || this.muted || this.recognitionPaused) return;
+      if (this.turnMode !== 'auto' || this.examinerBusy) return;
+      const text = this.currentText();
+      if (text) this.commitText(text);
+    }, this.autoProfile.grace);
+  }
+
+  private clearPendingCommit(): void {
+    if (this.pendingCommitTimer !== null) {
+      window.clearTimeout(this.pendingCommitTimer);
+      this.pendingCommitTimer = null;
+    }
+  }
+
   private onSilence(): void {
     if (this.closed || this.muted || this.recognitionPaused) return;
     const hadSpeech = this.speechActive;
@@ -498,10 +548,12 @@ export class DeepSeekVoiceSession {
     // manual / Part 2：绝不因为思考停顿而提前提交，等用户点「我说完了 / 我讲完了」。
     if (this.turnMode !== 'auto' || this.examinerBusy) return;
     const text = this.currentText();
-    if (text) this.commitText(text);
+    // auto：先给 grace 窗口（默认约 0.95s）再提交；期间一开口就取消。
+    if (text) this.schedulePendingCommit();
   }
 
   private commitAccumulated(): void {
+    this.clearPendingCommit();
     const text = this.currentText();
     if (text) this.commitText(text);
   }
@@ -510,6 +562,7 @@ export class DeepSeekVoiceSession {
     const clean = text.replace(/\s+/g, ' ').trim();
     if (!clean || this.closed) return;
     this.clearSilenceTimer();
+    this.clearPendingCommit();
     this.speechActive = false;
     const itemId = this.ensureItemId();
     this.emit({ type: 'user_transcript_final', itemId, text: clean });
@@ -552,6 +605,7 @@ export class DeepSeekVoiceSession {
     this.lastCaption = '';
     this.speechActive = false;
     this.clearSilenceTimer();
+    this.clearPendingCommit();
   }
 
   private ensureItemId(): string {
@@ -568,6 +622,7 @@ export class DeepSeekVoiceSession {
   private pauseRecognition(): void {
     this.recognitionPaused = true;
     this.clearSilenceTimer();
+    this.clearPendingCommit();
     this.stopRecognition();
     this.resetSegment();
     this.speechActive = false;
@@ -720,6 +775,8 @@ export class DeepSeekVoiceSession {
   private interrupt(): void {
     const wasBusy = this.examinerBusy;
     this.turnSeq += 1;
+    this.clearSilenceTimer();
+    this.clearPendingCommit();
     const controller = this.abortController;
     this.abortController = null;
     try {
@@ -993,6 +1050,7 @@ export class DeepSeekVoiceSession {
 
   private clearTimers(): void {
     this.clearSilenceTimer();
+    this.clearPendingCommit();
     if (this.restartTimer !== null) {
       window.clearTimeout(this.restartTimer);
       this.restartTimer = null;

@@ -39,7 +39,7 @@ import {
   upsertMemory,
 } from './store';
 
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.2.1';
 const PORT = Number(process.env.PORT || 3000);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webDist = path.resolve(here, '../../web/dist');

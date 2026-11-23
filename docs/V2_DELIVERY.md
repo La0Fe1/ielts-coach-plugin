@@ -265,3 +265,45 @@ README 增加依赖许可提示（`@andresaya/edge-tts` 为 GPL-3.0-only，二�
 
 **仍未验证**：真实 DeepSeek / 百炼 / Gemini / OpenAI Key、真实浏览器 SpeechRecognition 与真麦克风、
 真机 Safari / Android 的 TTS 解锁、`docker build` 与云平台部署（同上第三节）。
+---
+
+# v2.2.1 修复记录（DeepSeek 纯语音「思考停顿被打断」，2026-11-23）
+
+## 一、真实问题与定位
+
+用户在 v2.2.0 真机试跑时反馈：一个问题还没答完，只是先答一句再稍作思考，就被考官打断并让他扩展。
+用本机 `~/.ielts-coach/store.json` 里那一节课的真实时间线定位：
+
+| 时间 | 事件 |
+| --- | --- |
+| 17:14:25.148 | 考官开场并问第 1 题 |
+| 17:14:59.830 | 用户字幕定稿：`you are more or less`（明显是半句话） |
+| 17:15:00.458 | 考官开始回复（间隔 **628 ms**），内容为「tell me a bit more…」 |
+
+结论：**不是识别错误、不是网络问题，而是自动提交的停顿阈值太短** —— v2.2.0 的
+`1.35–1.75s` 停顿就会提交，而人思考时停 2 秒很常见；提交后考官立即接话，体感就是被打断。
+
+## 二、修复内容
+
+1. `web/src/realtime/deepseekSession.ts`：auto 模式改为「两段式 endpointing」——
+   停顿达到阈值后**先进入 grace 缓冲窗口**，窗口内任何新识别词（interim 或 final）都会取消提交并继续累积；
+   窗口结束仍无新词才真正提交。缓冲区在静音、暂停、手动提交、打断、标记说话等所有路径都会清理。
+2. 三档「接话速度」（`RealtimeSettings.pauseTolerance`，默认 `standard`）：
+   - `fast`：停顿 1.5–1.75s + 缓冲 0.7s（≈ 2.2–2.45s）
+   - `standard`：停顿 2.5–2.9s + 缓冲 0.95s（≈ 3.45–3.85s，默认）
+   - `patient`：停顿 3.5–4.0s + 缓冲 1.2s（≈ 4.7–5.2s）
+3. `web/src/components/SettingsSheet.tsx`：DeepSeek 面板新增「接话速度」芯片与说明；
+   `web/src/App.tsx` 把选择传入控制器。手动模式 / Part 2 逻辑完全不变。
+4. 版本号统一 `2.2.1`（root / shared / server / web + package-lock 5 处 workspace version），
+   `APP_VERSION` 与 MCP server version 同步；测试中的版本断言同步更新。
+
+## 三、验收（lead 复跑）
+
+| 项目 | 结果 |
+| --- | --- |
+| 类型检查 | `npm run typecheck` → exit 0（shared / server / web 全过） |
+| 生产构建 | `npm run build` → exit 0（web 45 模块，`index-CP-thinS.js` 235.47 KB / gzip 75.85 KB；server tsc 通过） |
+| 自动化测试 | `npm test` → 8 个文件 / 85 项照样全绿（版本断言更新为 2.2.1） |
+| 真机复测 | **未做**：3.45–3.85 秒停顿的实际体感需要用户戴耳机再跑一轮确认；真机 Safari / Android 未测 |
+
+**说明**：这是补丁版，服务端业务逻辑未变；主要是前端 endpointing 与设置项。

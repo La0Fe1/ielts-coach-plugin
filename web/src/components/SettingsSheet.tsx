@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { PublicConfig, RealtimeSettings, ReviewMode } from '@ielts/shared';
+import type { PauseTolerance, PublicConfig, RealtimeSettings, ReviewMode } from '@ielts/shared';
 
 type VoiceAccent = NonNullable<RealtimeSettings['voiceAccent']>;
 
@@ -23,6 +23,16 @@ const PROVIDERS: Array<{ id: RealtimeSettings['provider']; label: string; models
 const VOICE_ACCENTS: Array<{ id: VoiceAccent; label: string }> = [
   { id: 'uk', label: '英音考官 Sonia' },
   { id: 'us', label: '美音考官 Jenny' },
+];
+
+/**
+ * v2.2.1: how long a thinking pause may last before the answer is submitted.
+ * The default used to be too snappy and cut learners off mid-thought.
+ */
+const PAUSE_TOLERANCES: Array<{ id: PauseTolerance; label: string }> = [
+  { id: 'fast', label: '快速（约 2 秒）' },
+  { id: 'standard', label: '标准（约 3 秒，推荐）' },
+  { id: 'patient', label: '耐心（约 4 秒）' },
 ];
 
 /** Official "where do I get a key" links, shown in the collapsible guide card. */
@@ -163,6 +173,7 @@ export function SettingsSheet(props: {
   const toggleKeyGuide = () => setGuideOpen((current) => !current);
 
   const accent: VoiceAccent = draft.voiceAccent === 'us' ? 'us' : 'uk';
+  const pauseTolerance: PauseTolerance = draft.pauseTolerance || 'standard';
 
   const testConnection = async () => {
     setTesting(true);
@@ -237,6 +248,24 @@ export function SettingsSheet(props: {
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="field">
+              <span>接话速度（停顿多久算你说完）</span>
+              <div className="chips">
+                {PAUSE_TOLERANCES.map((item) => (
+                  <button
+                    key={item.id}
+                    className={'chip accent-chip' + (pauseTolerance === item.id ? ' selected' : '')}
+                    onClick={() => setDraft({ ...draft, pauseTolerance: item.id })}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <p className="hint">
+                提交前还有约 1 秒「继续说话」窗口：停顿期间你一开口，这一轮就不会被打断。
+                思考多就选「耐心」，想练抢答速度就选「快速」。
+              </p>
             </div>
           </div>
         )}

@@ -12,6 +12,13 @@ export type ExaminerStyle = 'friendly' | 'strict' | 'coach';
 /** Where per-turn grammar coaching comes from: the web app or an external AI client. */
 export type ReviewMode = 'auto' | 'external' | 'deepseek' | 'custom';
 
+/**
+ * How patient the DeepSeek pure-voice mode is before it treats a pause as
+ * "the learner finished": fast = snappy, standard = default, patient = long
+ * thinking pauses never get cut off.
+ */
+export type PauseTolerance = 'fast' | 'standard' | 'patient';
+
 export interface PlanQuestion {
   part: 'part1' | 'part2' | 'part3';
   kind: 'question' | 'cue_card' | 'follow_up';
@@ -138,6 +145,8 @@ export interface RealtimeSettings {
   reviewMode?: ReviewMode;
   /** Examiner voice used by the DeepSeek pure-voice mode (Edge Neural TTS). */
   voiceAccent?: 'uk' | 'us';
+  /** DeepSeek pure-voice only: how long a thinking pause may last before submitting. */
+  pauseTolerance?: PauseTolerance;
   partMode: PartMode;
   targetBand: number;
   style: ExaminerStyle;
